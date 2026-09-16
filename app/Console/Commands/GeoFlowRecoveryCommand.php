@@ -3,22 +3,24 @@
 namespace App\Console\Commands;
 
 use App\Services\SystemUpdater\RecoveryPreparation;
+use App\Services\SystemUpdater\RecoveryReconciliation;
 use Illuminate\Console\Command;
 use Throwable;
 
 class GeoFlowRecoveryCommand extends Command
 {
-    protected $signature = 'geoflow:recovery {--phase=inspect} {--transaction=} {--expected-admin-digest=} {--json}';
+    protected $signature = 'geoflow:recovery {--phase=inspect} {--transaction=} {--expected-admin-digest=} {--after=0} {--limit=100} {--json}';
 
     protected $description = 'Run fixed isolated host recovery validation and credential invalidation';
 
-    public function handle(RecoveryPreparation $recovery): int
+    public function handle(RecoveryPreparation $recovery, RecoveryReconciliation $reconciliation): int
     {
         try {
             $report = match ($this->option('phase')) {
                 'inspect' => $recovery->inspect(),
                 'prepare' => $recovery->prepare((string) $this->option('transaction'), (string) $this->option('expected-admin-digest')),
                 'verify' => $recovery->verify((string) $this->option('transaction')),
+                'reconcile-inspect' => $reconciliation->inspect((string) $this->option('transaction'), (int) $this->option('after'), (int) $this->option('limit')),
                 default => throw new \RuntimeException('recovery_phase_invalid'),
             };
         } catch (Throwable $exception) {

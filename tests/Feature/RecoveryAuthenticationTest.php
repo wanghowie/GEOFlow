@@ -7,6 +7,7 @@ use App\Models\Admin;
 use App\Models\Article;
 use App\Models\Author;
 use App\Models\Category;
+use App\Models\KnowledgeBase;
 use App\Services\Api\ApiTokenService;
 use App\Services\BrowserOperations\DeviceAuthorizationService;
 use App\Services\SystemUpdater\RecoveryState;
@@ -122,6 +123,34 @@ class RecoveryAuthenticationTest extends TestCase
             Admin::AUTH_VERSION_SESSION_KEY => $admin->auth_version,
             RecoveryState::SESSION_KEY => str_repeat('c', 32),
         ])->get(route('admin.dashboard'))->assertRedirect(route('admin.login'));
+    }
+
+    public function test_http_ready_blocks_get_and_head_that_would_create_a_fact_library(): void
+    {
+        $this->hostState('http_ready');
+        $admin = $this->admin();
+        $knowledge = KnowledgeBase::query()->create(['name' => 'Restored knowledge', 'content' => 'Evidence']);
+        $this->actingAs($admin, 'admin')->withSession([
+            Admin::AUTH_VERSION_SESSION_KEY => $admin->auth_version,
+            RecoveryState::SESSION_KEY => str_repeat('a', 32),
+        ]);
+
+        foreach (['GET', 'HEAD'] as $method) {
+            $this->call($method, route('admin.knowledge-bases.facts.index', $knowledge->id))->assertServiceUnavailable();
+            $this->assertDatabaseCount('knowledge_fact_libraries', 0);
+        }
+    }
+
+    public function test_http_ready_preserves_login_dashboard_and_public_permalink_resolution(): void
+    {
+        $this->hostState('http_ready');
+        $admin = $this->admin();
+        $this->post(route('admin.login.attempt'), ['username' => $admin->username, 'password' => 'recovery-test-password'])
+            ->assertRedirect(route('admin.dashboard'));
+        $this->get(route('admin.dashboard'))->assertOk();
+        $this->get('/absent-custom-permalink')->assertNotFound();
+        $this->assertDatabaseCount('task_runs', 0);
+        $this->assertDatabaseCount('view_logs', 0);
     }
 
     public function test_password_web_login_binds_session_and_remember_credential(): void
