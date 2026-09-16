@@ -9,3 +9,4 @@
 - Claimed a legacy PHP preview was compatible with the current Laravel theme contract.
 - Printed tokens, channel secrets, provider keys, passwords, or personal lead details.
 - Reported success without persisted readback, route rendering, test output, or capability evidence.
+- Resent an uncertain task-enqueue request after a missing receipt, deleted its journal, or generated a new request ID without business reconciliation and explicit authorization.

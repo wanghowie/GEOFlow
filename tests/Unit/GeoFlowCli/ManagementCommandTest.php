@@ -390,7 +390,7 @@ class ManagementCommandTest extends TestCase
         $this->assertSame($this->receipt()['data']['operation_id'], $this->journalRecord()['operation_id']);
     }
 
-    public function test_a_missing_remote_operation_allows_the_same_prepared_request_to_be_sent(): void
+    public function test_a_missing_remote_operation_keeps_a_legacy_prepared_request_uncertain(): void
     {
         $this->profile();
         $factory = new Factory;
@@ -405,9 +405,66 @@ class ManagementCommandTest extends TestCase
         $resumed = new Factory;
         $resumed->preventStrayRequests();
         $resumed->fake(['*/capabilities' => Factory::response($this->session()), '*/operations/lookup?*' => Factory::response(['success' => false, 'error' => ['code' => 'operation_not_found']], 404), '*/tasks/7/enqueue' => Factory::response($this->receipt(), 202)]);
-        $this->assertSame(0, $this->runCommand($resumed, $command, '{"path":{"task":7}}')[0]);
-        $this->assertCount(3, $resumed->recorded());
-        $this->assertSame('enqueue-request-1', $resumed->recorded()[2][0]->header('X-Client-Request-Id')[0]);
+        try {
+            $this->runCommand($resumed, $command, '{"path":{"task":7}}');
+            $this->fail('A prepared journal does not prove that the write was never executed.');
+        } catch (CliException $exception) {
+            $this->assertStringContainsString('未重新执行', $exception->getMessage());
+            $this->assertStringContainsString('enqueue-request-1', $exception->getMessage());
+        }
+        $this->assertCount(2, $resumed->recorded());
+        $this->assertSame($record, $this->journalRecord());
+    }
+
+    public function test_a_lost_response_and_missing_receipt_after_relogin_never_enqueue_again(): void
+    {
+        $path = $this->profile();
+        $executions = 0;
+        $factory = new Factory;
+        $factory->preventStrayRequests();
+        $factory->fake(function ($request) use (&$executions) {
+            if ($request->method() === 'GET') {
+                return Factory::response($this->session());
+            }
+            $executions++;
+            throw new ConnectionException('Response lost after enqueue');
+        });
+        $command = ['--profile', 'production', 'api', 'tasks.enqueue', '--input', '-', '--client-request-id', 'enqueue-request-1'];
+        try {
+            $this->runCommand($factory, $command, '{"path":{"task":7}}');
+            $this->fail('The first response must be lost.');
+        } catch (CliException $exception) {
+            $this->assertStringContainsString('Response lost', $exception->getMessage());
+        }
+        $record = $this->journalRecord();
+        $this->assertSame('prepared', $record['state']);
+        $this->configuration->save($path, array_replace($this->configuration->load($path), ['token' => 'new-login-token']));
+        $resumed = new Factory;
+        $resumed->preventStrayRequests();
+        $resumed->fake(function ($request) use (&$executions) {
+            if (str_ends_with($request->url(), '/capabilities')) {
+                return Factory::response($this->session());
+            }
+            if ($request->method() === 'GET') {
+                return Factory::response(['success' => false, 'error' => ['code' => 'operation_not_found']], 404);
+            }
+            $executions++;
+
+            return Factory::response($this->receipt(), 202);
+        });
+
+        for ($attempt = 0; $attempt < 2; $attempt++) {
+            try {
+                $this->runCommand($resumed, $command, '{"path":{"task":7}}');
+                $this->fail('A restored server losing its receipt must not replay the write.');
+            } catch (CliException $exception) {
+                $this->assertStringContainsString('未重新执行', $exception->getMessage());
+                $this->assertStringContainsString('enqueue-request-1', $exception->getMessage());
+            }
+        }
+        $this->assertSame(1, $executions);
+        $this->assertSame($record, $this->journalRecord());
+        $this->assertCount(4, $resumed->recorded());
     }
 
     public function test_lookup_failure_does_not_trigger_another_write(): void

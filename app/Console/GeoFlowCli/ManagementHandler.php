@@ -183,6 +183,7 @@ final class ManagementHandler
                     if ($prepared['operation_id'] !== null) {
                         throw new CliException('本地已有操作收据，远端记录暂不可用；未重新执行，请核对实例恢复或收据保留状态');
                     }
+                    throw new CliException('请求 '.$requestId.' 的此前结果尚无法确认；未重新执行。请保留原请求 ID，核对实例恢复和业务结果；对账确认可重做并明确授权后，再创建新请求');
                 }
             }
         }

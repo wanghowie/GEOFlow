@@ -43,6 +43,8 @@ Input is structured as `path`, `query`, and `body`; it is never an arbitrary URL
 
 For `api tasks.enqueue`, choose one client request ID and retain it. The client writes a protected journal before transmission. Reuse the same identity/input when recovering and query `operation lookup CLIENT_REQUEST_ID` after a lost response. Re-login to the same instance/account preserves access when current resource permissions still permit it. A different input with the same ID is a conflict. `operation wait ID --wait-seconds 30` is bounded; pending state must not be reported as completed work.
 
+A missing remote receipt cannot prove the write was never executed: restoring an older database can erase its record. Repeated local requests stop on `operation_not_found` / 404, including old `prepared` journals without an operation ID. Keep the journal through login, profile binding and CLI updates. Reconcile the business result and recovery history; only an explicit instruction to execute again after that reconciliation permits a new request ID. Do not delete the journal or generate a new ID to bypass an uncertain result.
+
 Legacy command idempotency and new receipt support use separate request headers. Use `--client-request-id` for `api tasks.enqueue`; receipt operations reject `--idempotency-key`. The legacy `task enqueue --idempotency-key` command remains supported. The server rejects requests combining `X-Client-Request-Id` and `X-Idempotency-Key`, so no requested protection is silently ignored. Never infer a receipt from a POST method or attach automatic retries to every mutation.
 
 ## Delivery boundary
