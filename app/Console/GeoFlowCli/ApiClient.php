@@ -294,7 +294,10 @@ class ApiClient
                 ...$secrets,
             );
             $safeRaw = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-            throw new ApiException($message, $response->status(), $payload, $safeRaw);
+            $retryHeader = trim($response->header('Retry-After'));
+            $retryAfter = ctype_digit($retryHeader) ? min(86400, (int) $retryHeader)
+                : (($timestamp = strtotime($retryHeader)) !== false ? min(86400, max(0, $timestamp - time())) : null);
+            throw new ApiException($message, $response->status(), $payload, $safeRaw, $retryAfter);
         }
 
         return new ApiResult($raw, $payload, $response->status());

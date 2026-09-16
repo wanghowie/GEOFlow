@@ -123,6 +123,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'current_password',
             'current_admin_password',
             'updater_authorization_code',
+            'authorization_code',
             'new_password',
             'confirm_password',
             'keywords_text',
@@ -174,13 +175,19 @@ return Application::configure(basePath: dirname(__DIR__))
 
             $rid = (string) ($request->attributes->get('request_id') ?? Str::uuid()->toString());
 
+            $headers = ['X-Request-Id' => $rid];
+            $retryAfter = $e->getDetails()['retry_after'] ?? null;
+            if ($e->getHttpStatus() === 429 && is_int($retryAfter) && $retryAfter >= 0 && $retryAfter <= 86400) {
+                $headers['Retry-After'] = (string) $retryAfter;
+            }
+
             return ApiResponse::error(
                 $e->getErrorCode(),
                 $e->getMessage(),
                 $rid,
                 $e->getHttpStatus(),
                 $e->getDetails()
-            )->withHeaders(['X-Request-Id' => $rid]);
+            )->withHeaders($headers);
         });
 
         $exceptions->render(function (Throwable $e, Request $request) {

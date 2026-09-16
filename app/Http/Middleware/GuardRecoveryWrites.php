@@ -18,7 +18,7 @@ class GuardRecoveryWrites
      */
     public function handle(Request $request, Closure $next): Response
     {
-        if (! $request->isMethodSafe()) {
+        if (! $request->isMethodSafe() && ! $request->routeIs('api.v1.management.updater.submit')) {
             $this->state->assertWriteEpoch($request->header('X-GEOFlow-Recovery-Epoch'));
         }
 

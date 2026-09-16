@@ -38,6 +38,13 @@ final class OperationJournal
         return ['client_request_id' => $requestId, 'repeated' => $existing !== null, 'operation_id' => $existing['operation_id'] ?? null, 'recovery_epoch' => $existing !== null ? ($existing['recovery_epoch'] ?? null) : ApiClient::recoveryEpoch($session)];
     }
 
+    public static function isPrepared(ConfigurationRepository $configuration, array $session, string $requestId): bool
+    {
+        self::validateId($requestId);
+
+        return self::read(self::path($configuration, $session, $requestId, false)) !== null;
+    }
+
     /** Only update an existing local journal; response bodies and credentials are never retained. */
     public static function recordResponse(ConfigurationRepository $configuration, array $session, array $receipt, ?string $expectedRequestId = null): void
     {
@@ -84,6 +91,9 @@ final class OperationJournal
         }
         if ($create && ! is_dir($directory) && ! @mkdir($directory, 0700, true) && ! is_dir($directory)) {
             throw new CliException('无法创建操作收据目录');
+        }
+        if ($create) {
+            self::syncDirectory(dirname($directory));
         }
         if ($create && PHP_OS_FAMILY !== 'Windows' && ! @chmod($directory, 0700)) {
             throw new CliException('无法保护操作收据目录');
@@ -148,6 +158,7 @@ final class OperationJournal
             if (! rename($temporary, $path)) {
                 throw new CliException('无法原子更新操作收据');
             }
+            self::syncDirectory(dirname($path));
         } finally {
             if (is_resource($stream)) {
                 fclose($stream);
@@ -158,13 +169,28 @@ final class OperationJournal
         }
     }
 
+    private static function syncDirectory(string $directory): void
+    {
+        $stream = @fopen($directory, 'r');
+        if ($stream === false) {
+            throw new CliException('无法持久化操作收据目录，未发送请求');
+        }
+        try {
+            if (! @fsync($stream)) {
+                throw new CliException('操作收据目录未持久化，未发送请求');
+            }
+        } finally {
+            fclose($stream);
+        }
+    }
+
     private static function canonicalInput(array $input): array
     {
         if (! array_is_list($input)) {
             ksort($input);
         }
         foreach ($input as $key => $value) {
-            if (preg_match('/(?:token|password|secret|api[_-]?key)/i', (string) $key) === 1) {
+            if (preg_match('/(?:token|password|secret|authorization[_-]?code|api[_-]?key)/i', (string) $key) === 1) {
                 $input[$key] = '[redacted]';
             } elseif (is_array($value)) {
                 $input[$key] = self::canonicalInput($value);

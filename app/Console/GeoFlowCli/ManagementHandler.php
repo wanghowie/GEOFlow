@@ -140,6 +140,9 @@ final class ManagementHandler
         if (! isset(ManagementOperationRegistry::all()[$name])) {
             throw new CliException('未知管理 operation ID，请先读取 capabilities');
         }
+        if (str_starts_with($name, 'updater.')) {
+            throw new CliException('运维操作请使用 geoflow updater 命令，以保留计划、受保护授权输入和宿主机续接信息');
+        }
         $operation = ManagementOperationRegistry::get($name);
         if (($operation['receipt'] ?? false) && array_key_exists('idempotency-key', $this->runtime->context->options)) {
             throw new CliException('管理收据操作不支持 --idempotency-key，请使用 --client-request-id；未发送请求');
