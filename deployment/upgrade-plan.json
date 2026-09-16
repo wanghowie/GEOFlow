@@ -827,6 +827,11 @@
       "name": "2026_09_16_094613_create_recovery_preparations_table",
       "sha256": "1f52879c213457e0ea1f453045b2573d692fe9b66c93e67dc691fc75fd70538f",
       "online": false
+    },
+    {
+      "name": "2026_09_16_144419_create_recovery_reconciliations_tables",
+      "sha256": "370b18a227ba6e9b14caf1aaf6314d56ce83b68b38547642ff97ccd23bbe1be1",
+      "online": false
     }
   ],
   "compatibility": {

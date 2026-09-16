@@ -3,6 +3,7 @@
 namespace App\Services\SystemUpdater;
 
 use App\Exceptions\ApiException;
+use Closure;
 
 final class RecoveryState
 {
@@ -14,6 +15,7 @@ final class RecoveryState
         private readonly string $directory,
         private readonly string $instanceId,
         private readonly bool $required,
+        private readonly ?Closure $readyGate = null,
     ) {}
 
     /** Read the mounted directory on every boundary; atomic replacement must remain visible. */
@@ -71,6 +73,10 @@ final class RecoveryState
             throw new ApiException('recovery_in_progress', '实例恢复仍在校验，暂未开放认证与写入', 503);
         }
 
+        if ($state !== null && $state['phase'] === 'ready') {
+            ($this->readyGate)?->__invoke($state);
+        }
+
         return $state;
     }
 
@@ -87,6 +93,9 @@ final class RecoveryState
         $state = $this->snapshot();
         if ($state !== null && $state['phase'] !== 'ready') {
             throw new ApiException('recovery_background_held', '恢复后的后台任务仍需对账，暂未恢复执行', 503);
+        }
+        if ($state !== null) {
+            ($this->readyGate)?->__invoke($state);
         }
     }
 

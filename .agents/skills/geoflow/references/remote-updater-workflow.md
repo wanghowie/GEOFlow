@@ -56,6 +56,8 @@ If the restored Core lacks new routes, use the approved host receipt lookup. Sto
 - Code switch-back preserves current data and requires compatibility. Theme field rollback has its own contract. Never substitute full restore for undoing a theme change.
 - Whole-host rollback or cloning can roll back the host ledger itself. Those workflows require identity re-registration and independent reconciliation.
 
+New Core source includes a host-only `geoflow:recovery-reconcile` command for inspection, append-only decisions and empty-set proofs. These are not remote `geoflow updater` actions. An authorized fixed host executor must check the installed command and contract before use. Every decision retains the original work with `execution_created=false`; even `verified_no_replay` and `reexecute_requested` remain held. A Core empty-set proof covers only the database and does not release background work. The current Updater does not provide the host release-to-ready flow. Preserve the original transaction and recovery point; never edit the host phase or remove evidence to bypass the gate. Nonempty restored work still requires domain-specific replay fences and separate new executions.
+
 ## Evidence and limits
 
 Report the redacted profile/instance, actual discovered protocol/actions, plan and request IDs, receipt state, source/target identities, maintenance effects, background status and verified layers. Keep source implementation, local fixtures, installed instance, native architecture rehearsal and official release evidence separate.

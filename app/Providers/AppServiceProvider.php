@@ -37,6 +37,7 @@ use App\Services\Outbound\SecureHttpFactory;
 use App\Services\Outbound\SystemHostResolver;
 use App\Services\Site\HostedSiteResolver;
 use App\Services\Site\SiteUrlGenerator;
+use App\Services\SystemUpdater\RecoveryReconciliation;
 use App\Services\SystemUpdater\RecoveryState;
 use App\Services\SystemUpdater\UnixSocketAgentClient;
 use App\Support\AdminUiRegistry;
@@ -81,6 +82,7 @@ class AppServiceProvider extends ServiceProvider
             (string) config('geoflow.recovery_control_directory', RecoveryState::CONTAINER_DIRECTORY),
             (string) config('geoflow.updater_instance_id', 'primary'),
             (bool) config('geoflow.recovery_contract_required', false),
+            fn (array $state) => $this->app->make(RecoveryReconciliation::class)->assertReady($state),
         ));
         $this->app->bind(AiModelWriteLock::class, DatabaseAiModelWriteLock::class);
         $this->app->singleton(FinalOutboundSecurityPolicy::class);
@@ -127,7 +129,7 @@ class AppServiceProvider extends ServiceProvider
             app(RecoveryState::class)->assertBackgroundReady();
         });
         Event::listen(CommandStarting::class, static function (CommandStarting $event): void {
-            if (! in_array($event->command, ['geoflow:recovery', 'geoflow:upgrade', 'up', 'down', 'migrate', 'migrate:status', 'config:cache', 'config:clear', 'route:cache', 'route:clear', 'view:cache', 'view:clear', 'optimize', 'optimize:clear', 'list', 'help'], true)) {
+            if (! in_array($event->command, ['geoflow:recovery', 'geoflow:recovery-reconcile', 'geoflow:upgrade', 'up', 'down', 'migrate', 'migrate:status', 'config:cache', 'config:clear', 'route:cache', 'route:clear', 'view:cache', 'view:clear', 'optimize', 'optimize:clear', 'list', 'help'], true)) {
                 app(RecoveryState::class)->assertBackgroundReady();
             }
         });
