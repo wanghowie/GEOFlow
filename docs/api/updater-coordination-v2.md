@@ -131,3 +131,16 @@ new journal record; an existing journal permits receipt reads only, even after
 and defaults to ten minutes. It returns exit 2 for pending timeout or manual
 recovery attention, exit 1 for failed/rolled-back, and exit 0 only for full success.
 A target without new Core routes requires host-side receipt lookup.
+
+## Coordinated distribution floor
+
+The pinned Core source includes `deployment/recovery-contract.json`. The Updater
+candidate and publication workflows validate that exact declaration and require
+minimum updater protocol `5`. A legacy Core checkout without this declaration
+keeps its maintenance/online floors `3`/`4`. An invalid declaration fails the
+build gate; no version-string inference or legacy fallback is used.
+
+Coordinated Core releases remain maintenance-only. The isolated same-application
+online rehearsal retains a source floor of `5`; its infrastructure evidence does
+not authorize online compatibility for another Core version pair. The existing
+schema 3 TUF manifest uses its existing `minimum_updater_protocol` field.
