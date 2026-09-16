@@ -3,6 +3,8 @@
 namespace App\Services\SystemUpdater;
 
 use App\Models\Admin;
+use App\Models\SiteThemeBinding;
+use App\Models\ThemeRelease;
 use App\Models\ThemeRevision;
 use App\Models\ThemeWorkspace;
 use App\Services\Api\ThemeRevisionStorage;
@@ -13,7 +15,7 @@ use RuntimeException;
 /** Fixed host-only recovery steps. The host state remains the authority for reopening services. */
 final class RecoveryPreparation
 {
-    private const INTENTS = [
+    public const INTENTS = [
         'jobs', 'failed_jobs', 'manual_publications', 'job_batches', 'site_theme_replications', 'ai_workspace_steps', 'ai_workspace_external_operations', 'task_runs', 'article_distributions', 'tasks',
         'url_import_jobs', 'ai_workspace_runs', 'article_ai_quality_checks', 'article_ai_optimization_runs',
         'title_generation_runs', 'knowledge_fact_generation_runs', 'ai_visibility_runs',
@@ -174,13 +176,31 @@ final class RecoveryPreparation
 
     private function verifyThemes(): int
     {
-        foreach (ThemeWorkspace::query()->cursor() as $workspace) {
-            if ($workspace->revision_id !== null && ! ThemeRevision::query()->whereKey($workspace->revision_id)->where('workspace_id', $workspace->id)->where('state', 'ready')->exists()) {
+        foreach (ThemeWorkspace::query()->where('state', 'draft')->cursor() as $workspace) {
+            if ($workspace->revision_id === null || ! ThemeRevision::query()->whereKey($workspace->revision_id)->where('workspace_id', $workspace->id)->where('theme_id', $workspace->theme_id)->where('state', 'ready')->exists()) {
+                throw new RuntimeException('recovery_theme_reference_invalid');
+            }
+        }
+        foreach (SiteThemeBinding::query()->whereNotNull('revision_id')->cursor() as $binding) {
+            if (! ThemeRevision::query()->whereKey($binding->revision_id)->where('theme_id', $binding->theme_id)->where('state', 'ready')->exists()) {
+                throw new RuntimeException('recovery_theme_reference_invalid');
+            }
+        }
+        foreach (ThemeRelease::query()->cursor() as $release) {
+            if (! ThemeRevision::query()->whereKey($release->revision_id)->where('workspace_id', $release->workspace_id)->where('state', 'ready')->exists()
+                || ($release->previous_revision_id !== null && ! ThemeRevision::query()->whereKey($release->previous_revision_id)->where('state', 'ready')->exists())) {
                 throw new RuntimeException('recovery_theme_reference_invalid');
             }
         }
         $count = 0;
         foreach (ThemeRevision::query()->where('state', 'ready')->cursor() as $revision) {
+            $expected = ['id' => $revision->id, 'files' => $revision->files, 'content_sha256' => $revision->content_sha256];
+            $manifest = $this->themes->read($this->themes->storage->path('revisions/'.$revision->id.'/revision.json'), 8388608);
+            if (json_decode($manifest, true) !== $expected
+                || ! hash_equals($revision->content_sha256, hash('sha256', json_encode([$revision->files, $revision->settings], JSON_THROW_ON_ERROR)))
+                || array_sum(array_column($revision->files, 'bytes')) !== $revision->total_bytes) {
+                throw new RuntimeException('recovery_theme_manifest_invalid');
+            }
             $this->themes->contents($revision);
             $count++;
         }
