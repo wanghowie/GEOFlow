@@ -7,7 +7,7 @@ final class OperationJournal
     /**
      * Persist identity and a non-secret digest before sending the request.
      *
-     * @return array{client_request_id: string, repeated: bool, operation_id: ?string}
+     * @return array{client_request_id: string, repeated: bool, operation_id: ?string, recovery_epoch: ?string}
      */
     public static function prepare(ConfigurationRepository $configuration, array $session, string $name, array $input, ?string $requestId): array
     {
@@ -19,7 +19,7 @@ final class OperationJournal
             'input_hash' => hash('sha256', json_encode(self::canonicalInput($input), JSON_THROW_ON_ERROR)),
         ];
         $path = self::path($configuration, $session, $requestId, true);
-        $existing = $configuration->withLock($path, function (string $path) use ($record): ?array {
+        $existing = $configuration->withLock($path, function (string $path) use ($record, $session): ?array {
             $existing = self::read($path);
             if ($existing !== null) {
                 foreach ($record as $key => $value) {
@@ -30,12 +30,12 @@ final class OperationJournal
 
                 return $existing;
             }
-            self::write($path, $record + ['operation_id' => null, 'state' => 'prepared']);
+            self::write($path, $record + ['operation_id' => null, 'state' => 'prepared', 'recovery_epoch' => ApiClient::recoveryEpoch($session)]);
 
             return null;
         });
 
-        return ['client_request_id' => $requestId, 'repeated' => $existing !== null, 'operation_id' => $existing['operation_id'] ?? null];
+        return ['client_request_id' => $requestId, 'repeated' => $existing !== null, 'operation_id' => $existing['operation_id'] ?? null, 'recovery_epoch' => $existing !== null ? ($existing['recovery_epoch'] ?? null) : ApiClient::recoveryEpoch($session)];
     }
 
     /** Only update an existing local journal; response bodies and credentials are never retained. */

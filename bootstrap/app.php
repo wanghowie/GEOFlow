@@ -17,6 +17,8 @@ use App\Http\Middleware\EnsureApiScope;
 use App\Http\Middleware\EnsureBrowserOperationsProtocol;
 use App\Http\Middleware\EnsureHostedSitesEnabled;
 use App\Http\Middleware\EnsureSuperAdmin;
+use App\Http\Middleware\GuardRecoveryTraffic;
+use App\Http\Middleware\GuardRecoveryWrites;
 use App\Http\Middleware\LimitArticleMarkdownExportRequestSize;
 use App\Http\Middleware\LogAdminActivity;
 use App\Http\Middleware\NormalizeRequestHost;
@@ -74,6 +76,8 @@ return Application::configure(basePath: dirname(__DIR__))
             EnforceCurrentSiteSurface::class,
             ScopeThemeRevision::class,
         ]);
+        $middleware->prependToGroup('web', GuardRecoveryTraffic::class);
+        $middleware->prependToGroup('api', GuardRecoveryTraffic::class);
         $middleware->appendToGroup('web', AssignApiRequestId::class);
 
         $middleware->alias([
@@ -81,6 +85,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'api.request_id' => AssignApiRequestId::class,
             // Authorization: Bearer，解析 Sanctum token 并注入 ApiAuthContext
             'api.auth' => AuthenticateApiToken::class,
+            'api.recovery' => GuardRecoveryWrites::class,
             // 校验 Token scopes，如 api.scope:catalog:read
             'api.scope' => EnsureApiScope::class,
             'browser.protocol' => EnsureBrowserOperationsProtocol::class,

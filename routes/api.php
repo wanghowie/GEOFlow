@@ -34,7 +34,7 @@ Route::prefix('v1')
             ->whereUuid(['workspace', 'revision'])->where('assetPath', '.*')->middleware('throttle:120,1,theme-preview-asset:')->name('api.v1.theme-preview-asset');
         // 公开：管理员登录，返回 API Token（无需 Bearer）
         Route::post('auth/login', [AuthController::class, 'login'])
-            ->middleware('throttle:admin-login');
+            ->middleware('throttle:admin-login')->name('api.v1.auth.login');
 
         Route::middleware(['browser.protocol'])
             ->prefix('browser-operations')
@@ -46,7 +46,7 @@ Route::prefix('v1')
             });
 
         // 需有效 Token + 对应 scope
-        Route::middleware(['api.auth'])->group(function (): void {
+        Route::middleware(['api.auth', 'api.recovery'])->group(function (): void {
             Route::get('capabilities', [ManagementSessionController::class, 'capabilities'])->name('api.v1.capabilities');
             Route::get('auth/session', [ManagementSessionController::class, 'show'])->name('api.v1.auth.session');
             Route::post('auth/logout', [ManagementSessionController::class, 'destroy'])->name('api.v1.auth.logout');
@@ -71,7 +71,7 @@ Route::prefix('v1')
                 ->group(function (): void {
                     Route::get('session', [BrowserSessionController::class, 'show'])->middleware('throttle:120,1');
                     Route::delete('session', [BrowserSessionController::class, 'destroy'])
-                        ->middleware(['api.scope:browser-operations:execute', 'throttle:30,1']);
+                        ->middleware(['api.scope:browser-operations:execute', 'throttle:30,1'])->name('api.v1.browser-session.logout');
                 });
 
             Route::middleware(['browser.protocol', 'api.scope:browser-operations:read'])

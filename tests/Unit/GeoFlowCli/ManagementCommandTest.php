@@ -6,6 +6,7 @@ use App\Console\GeoFlowCli\ApiException;
 use App\Console\GeoFlowCli\CliException;
 use App\Console\GeoFlowCli\CommandDispatcher;
 use App\Console\GeoFlowCli\ConfigurationRepository;
+use App\Console\GeoFlowCli\OperationJournal;
 use App\Support\Api\ManagementOperationRegistry;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory;
@@ -77,6 +78,61 @@ class ManagementCommandTest extends TestCase
         $status = (new CommandDispatcher($factory, $this->configuration))->dispatch($input->getRawTokens(), $input, $output, $error);
 
         return [$status, $output->fetch(), $error->fetch()];
+    }
+
+    public function test_login_preserves_epoch_for_legacy_commands_and_journals_keep_original_epoch_after_relogin(): void
+    {
+        $factory = new Factory;
+        $factory->fake(['*' => Factory::response(['success' => true, 'data' => ['token' => 'new-token', 'instance_id' => 'instance-test', 'admin' => ['id' => 7], 'recovery' => ['supported' => true, 'epoch' => str_repeat('a', 32)]]])]);
+        $this->runCommand($factory, ['login', '--profile', 'production', '--base-url', 'https://example.com', '--username', 'admin', '--password-stdin'], "password\n");
+        $saved = $this->configuration->load($this->configuration->profilePath('production'));
+        $this->assertSame(str_repeat('a', 32), $saved['recovery_epoch']);
+        $this->runCommand($factory, ['--profile', 'production', 'task', 'delete', '4', '--yes']);
+        $this->assertTrue($factory->recorded()[1][0]->hasHeader('X-GEOFlow-Recovery-Epoch', str_repeat('a', 32)));
+        $session = $this->session()['data'];
+        $session['recovery'] = ['supported' => true, 'epoch' => str_repeat('a', 32)];
+        $first = OperationJournal::prepare($this->configuration, $session, 'tasks.enqueue', [], 'recovery-request-1');
+        $session['recovery']['epoch'] = str_repeat('b', 32);
+        $second = OperationJournal::prepare($this->configuration, $session, 'tasks.enqueue', [], 'recovery-request-1');
+        $this->assertFalse($first['repeated']);
+        $this->assertTrue($second['repeated']);
+        $this->assertSame(str_repeat('a', 32), $second['recovery_epoch']);
+    }
+
+    public function test_malformed_login_epoch_is_revoked_using_a_fresh_session_before_failing(): void
+    {
+        $factory = new Factory;
+        $factory->preventStrayRequests();
+        $factory->fake([
+            '*/auth/login' => Factory::response(['success' => true, 'data' => ['token' => 'orphan-risk-token', 'instance_id' => 'instance-test', 'admin' => ['id' => 7], 'recovery' => ['supported' => true]]]),
+            '*/auth/session' => Factory::response(['success' => true, 'data' => ['recovery' => ['supported' => true, 'epoch' => str_repeat('a', 32)]]]),
+            '*/auth/logout' => Factory::response(['success' => true, 'data' => ['revoked' => true]]),
+        ]);
+        try {
+            $this->runCommand($factory, ['login', '--profile', 'production', '--base-url', 'https://example.com', '--username', 'admin', '--password-stdin'], "password\n");
+            $this->fail('Invalid identity must not be saved.');
+        } catch (CliException $exception) {
+            $this->assertStringContainsString('恢复代次', $exception->getMessage());
+        }
+        $this->assertCount(3, $factory->recorded());
+        $this->assertTrue($factory->recorded()[2][0]->hasHeader('X-GEOFlow-Recovery-Epoch', str_repeat('a', 32)));
+        $this->assertFileDoesNotExist($this->configuration->profilePath('production'));
+    }
+
+    public function test_legacy_write_with_environment_credentials_discovers_the_current_epoch_before_sending(): void
+    {
+        putenv('GEOFLOW_BASE_URL=https://example.com');
+        putenv('GEOFLOW_TOKEN=current-ephemeral-token');
+        $factory = new Factory;
+        $factory->preventStrayRequests();
+        $factory->fake([
+            '*/auth/session' => Factory::response(['success' => true, 'data' => ['recovery' => ['supported' => true, 'epoch' => str_repeat('b', 32)]]]),
+            '*/tasks/4' => Factory::response(['success' => true]),
+        ]);
+        $this->runCommand($factory, ['task', 'delete', '4', '--yes']);
+        $this->assertCount(2, $factory->recorded());
+        $this->assertSame('GET', $factory->recorded()[0][0]->method());
+        $this->assertTrue($factory->recorded()[1][0]->hasHeader('X-GEOFlow-Recovery-Epoch', str_repeat('b', 32)));
     }
 
     public function test_named_profile_ignores_unknown_working_directory_configuration(): void
@@ -314,11 +370,11 @@ class ManagementCommandTest extends TestCase
         $this->profile();
         $factory = new Factory;
         $factory->preventStrayRequests();
-        $factory->fake(['*/tasks/7/enqueue' => Factory::response(['success' => true, 'data' => ['job_id' => 17]], 201)]);
+        $factory->fake(['*/auth/session' => Factory::response(['success' => false, 'error' => ['code' => 'not_found']], 404), '*/tasks/7/enqueue' => Factory::response(['success' => true, 'data' => ['job_id' => 17]], 201)]);
         [$status] = $this->runCommand($factory, ['--profile', 'production', 'task', 'enqueue', '7', '--idempotency-key', 'legacy-key']);
         $this->assertSame(0, $status);
-        $this->assertCount(1, $factory->recorded());
-        $request = $factory->recorded()[0][0];
+        $this->assertCount(2, $factory->recorded());
+        $request = $factory->recorded()[1][0];
         $this->assertSame(['legacy-key'], $request->header('X-Idempotency-Key'));
         $this->assertSame([], $request->header('X-Client-Request-Id'));
     }

@@ -99,7 +99,7 @@ final class ManagementHandler
             if (is_link($lockedPath) || ! is_file($lockedPath) || $this->runtime->configuration->load($lockedPath) !== $saved) {
                 throw new CliException('身份查询期间配置已经变化，未覆盖新的配置或凭据');
             }
-            $warnings = $this->runtime->configuration->saveLocked($lockedPath, array_replace($saved, ['instance_id' => $instanceId, 'admin_id' => $adminId]));
+            $warnings = $this->runtime->configuration->saveLocked($lockedPath, array_replace($saved, ['instance_id' => $instanceId, 'admin_id' => $adminId, 'recovery_epoch' => ApiClient::recoveryEpoch($session)]));
             $this->runtime->context->deferWarnings($warnings);
         });
         $this->runtime->writeJson(['bound' => true, 'config_file' => $path, 'base_url' => $config['base_url'], 'instance_id' => $instanceId, 'admin_id' => $adminId]);
@@ -268,6 +268,7 @@ final class ManagementHandler
             if ($saved !== null) {
                 $saved['token'] = null;
                 $saved['admin_id'] = null;
+                $saved['recovery_epoch'] = null;
                 $this->runtime->configuration->saveLocked($lockedPath, $saved);
                 $localCleared = true;
             }
