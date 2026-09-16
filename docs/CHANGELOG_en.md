@@ -4,9 +4,9 @@ This document tracks user-facing updates in the public repository. For future Gi
 
 ## 2026-09-16
 
-### v3.2.0-preview.1
+### v3.2.0-beta.1
 
-- Core advances to `3.2.0-preview.1`; CLI `0.4.0-preview.1` adds a standalone PHAR, signed-bundle installation and interrupted-update recovery, named profiles, explicit login scopes, identity binding, and current-token revocation.
+- Core advances to `3.2.0-beta.1`; CLI `0.4.0-preview.1` adds a standalone PHAR, signed-bundle installation and interrupted-update recovery, named profiles, explicit login scopes, identity binding, and current-token revocation.
 - Task enqueue gains receipts and client request IDs for lost-response lookup, duplicate protection, and recovery after logging back into the same account. Theme drafts do not yet support receipt recovery.
 - Built-in and installed primary-site themes support remote drafts, chunked file reads, atomic incremental changes, signed previews with real content, and discard, without manual theme-package round trips for draft editing.
 - Native template code requires a trusted super administrator, explicit code scope, and a short-lived password grant. Admin appearance writes share a lock and version conflict checks.
