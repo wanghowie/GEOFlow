@@ -1,224 +1,230 @@
-# GEOFlow ChatGPT插件与MCP后台管理方案
+# GEOFlow原生MCP运营后台与ChatGPT接入方案
 
-状态：Proposed，仅设计文档，尚未实现或部署。  
-复核日期：2026-09-18。  
-代码基线：`9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1`。  
-配套文档：[复核发现](../reviews/chatgpt-mcp-management-review.md) · [验收与实施清单](chatgpt-mcp-management-acceptance.md)。
+状态：架构方向已确认；实现方案待开发与验证。本文及PR#148仅修改文档，尚未提供可运行MCP、OAuth或插件。  
+修订日期：2026-09-19。源码基线：`9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1`。  
+本轮接续的PR版本：`481394fc38b094bcf68c76092d67ee1489b391c3`。  
+配套：[复核报告](../reviews/chatgpt-mcp-management-review.md) · [80项验收清单](chatgpt-mcp-management-acceptance.md)。
 
-## 1. 决策摘要
+## 1. 架构决策与本次边界
 
-目标：让获得授权的用户在ChatGPT中查询GEOFlow后台、理解运营问题、维护草稿，并在后续阶段执行受控任务与发布协作。
+采用**GEOFlow单仓库内置MCP模块、随站点部署、每个实例独立连接和授权**的主方案。ChatGPT插件与Skill负责使用引导和分发；独立MCP仓库、集中多租户网关留待确有独立发布或托管需求时另行决策。
 
-推荐采用“业务Skill + 独立MCP适配服务 + GEOFlow API及业务服务”的结构。首版限定一个已登记实例、一个明确授权的管理账号和只读工具。写入能力需要补充Core侧的原子状态检查、资源授权与可核对的操作结果，不能仅在MCP层包装现有HTTP请求就宣称已经安全完成。
+本修订替代此前RFC中“独立TypeScript sidecar为首版默认形态”的选择。原生调用链不再要求MCP回环调用本站REST API，也不要求额外保存一套本站Sanctum Token。原有安全要求继续保留；变更的是实现边界，业务授权、原子草稿更新、预算、收据和撤销均不能省略。
 
-主要决策：
+本PR交付详细方案、实施拆分、风险与验收规格。没有新增运行代码、依赖、迁移、生产凭据、独立仓库或实际插件包；没有部署或合并。本次用户授权范围为补充原PR方案。
 
-- 保留现有后台与业务服务；MCP不直连业务数据库，不执行任意Shell、SQL、PHP或任意URL请求。
-- 先完成MCP连接，再打包Skill与插件。完整插件安装、开发者模式接入、组织内分发和公开目录发布分别验收。
-- 首版可授权整实例共享运营资料，授权页面明确显示该范围。跨客户、跨租户的数据隔离不作默认承诺。
-- 将只读、草稿写入、内容生成、对外发布分成独立阶段和权限组，默认关闭写入。
-- 主题代码编辑、Updater、备份恢复、删除、人工质量放行、账号与密钥管理不进入首版工具集。
-- 本PR仅交付方案、复核依据和验收清单；不会安装插件、创建生产Token、执行迁移、修改业务代码或部署站点。
-
-## 2. 当前实现与可复用边界
-
-以下路径均相对于本仓库。事实依据固定到上述提交；实施时必须重新检查实际部署版本。
-
-| 领域 | 已核对的实现 | 接入时的边界 |
+| 决策 | 首版要求 | 后续扩展条件 |
 | --- | --- | --- |
-| REST API | [routes/api.php](../../routes/api.php)提供文章、任务、Job、素材及管理接口 | Web后台路由数量不能等同于可用领域操作数量 |
-| Token | [ApiTokenService](../../app/Services/Api/ApiTokenService.php)使用Sanctum并支持scope、期限、撤销 | Sanctum Token不等于MCP OAuth授权流程；不向模型传递凭据 |
-| 会话与能力 | [ManagementSessionController](../../app/Http/Controllers/Api/V1/ManagementSessionController.php)返回实例、账号、scope与管理操作 | 每次调用仍要授权；缓存的工具列表不授予权限 |
-| 能力注册表 | [ManagementOperationRegistry](../../app/Support/Api/ManagementOperationRegistry.php)描述管理操作 | 文章列表等旧API未全部纳入，嵌套业务schema不完整，需独立兼容映射 |
-| 文章与质检 | [ArticleController](../../app/Http/Controllers/Api/V1/ArticleController.php)及[ArticleGeoFlowService](../../app/Services/GeoFlow/ArticleGeoFlowService.php) | 普通文章查询入口没有显式viewer参数；上线前确认所授权的数据范围 |
-| 任务 | [TaskController](../../app/Http/Controllers/Api/V1/TaskController.php)已有need_review与发布scope联动 | 保留已有防护，并测试任务被其他操作者修改后的执行行为 |
-| 重复请求 | [IdempotencyService](../../app/Services/Api/IdempotencyService.php)与[远程CLI流程](../../.agents/skills/geoflow/references/remote-cli-workflow.md) | 旧幂等头和新收据头不同；不能统一给所有POST自动重试 |
-| 远程主题 | [远程管理覆盖说明](../api/remote-management-preview.md) | 当前主题发布未开放；已有预览能力不能被描述为完整主题管理 |
+| 仓库 | 在GEOFlow内模块化实现，使用同一应用版本 | 独立团队、独立发布或多产品复用有明确收益后拆包或拆仓 |
+| 部署 | 复用站点运行环境和业务队列，不增加必需的Node服务 | 负载或故障隔离需要时可从同仓库拆进程 |
+| 实例连接 | 一个连接绑定一个部署实例和一个已授权管理员 | 多连接分别授权；集中路由网关另做威胁模型 |
+| 技术选型 | 优先验证Laravel MCP与Passport的原生组合 | 安装、协议或身份兼容不通过时记录ADR，再选择同栈替代组件 |
+| 权限开放 | P0只读，草稿、生成、发布独立开关 | 对应阶段通过验收后才开放 |
+| 插件 | 可选工作流与分发入口，连接可先独立使用 | 完整安装、组织分发、公开目录分别验收 |
 
-特别说明：`GET /articles/{id}/ai-quality/status`返回轻量进度，不包含完整证据正文。分析质检原因需要另行读取经脱敏的文章质检详情。当前文章列表控制器不提供通用起止日期过滤，最近7天统计不能仅通过额外传入未经支持的参数实现。
+## 2. 产品目标与明确不做的事
 
-## 3. 系统结构与责任
+目标体验：部署兼容版本 → 后台启用AI连接 → 复制实例MCP地址 → 在ChatGPT登记并跳转GEOFlow登录授权 → 对话读取、分析和受控操作 → 后台核对结果及随时撤销。
+
+| 用户请求示例 | 所需能力 | 成功应如何表述 |
+| --- | --- | --- |
+| 看看这篇文章为什么质检失败 | 文章与完整质检证据读取 | 引用文章ID、证据和数据时间；缺证据时说明限制 |
+| 汇总最近七天失败的生成任务 | 结构化日志、时间过滤及聚合 | 返回统计口径、分母、截止时间与覆盖范围 |
+| 修改这篇草稿，先让我确认差异 | 计划、可信批准、原子草稿提交 | 返回新revision、实际状态和操作收据 |
+| 创建任务生成五篇文章，全部待审 | 任务计划、预算、冻结配置与队列 | 分别报告创建、入队、执行、质检状态 |
+| 把已审核文章发布到选定渠道 | P3发布计划、批准与渠道门禁 | 按渠道报告实际效果，允许部分成功和结果未知 |
+
+首版排除：任意Shell、SQL、PHP或HTTP代理；直接读取服务器文件；数据库管理；删除；Updater与备份恢复；主题原生代码编辑；用户与密钥管理；人工覆盖质量门禁；任意URL素材导入；浏览器外站自动发布。既有后台存在某个功能，不代表它应自动成为MCP工具。
+
+ChatGPT联网能力与MCP能力各自受客户端控制。MCP不会自动获得ChatGPT浏览器或搜索权限；外部研究资料仅作为输入证据，进入GEOFlow后仍受内容审核和保存规则约束。
+
+## 3. 已核对的源码基础与缺口
+
+以下观察固定到源码基线，沿用原PR已有复核并补查原生身份与实例管理路径；静态观察不构成生产漏洞确认。
+
+| 现有入口 | 可复用内容 | 原生接入注意事项 |
+| --- | --- | --- |
+| [composer.json](../../composer.json) | Laravel 12、PHP要求与Sanctum依赖 | Laravel MCP、Passport及锁文件须在实施PR验证，文档不承诺已安装 |
+| [routes/api.php](../../routes/api.php) | 文章、任务、Job、素材、站点、会话和能力接口 | 复用业务契约，避免自动暴露全部路由 |
+| [config/auth.php](../../config/auth.php)、[Admin](../../app/Models/Admin.php) | admin guard、admins provider及Sanctum Token | 默认web关联users；OAuth不能误用普通用户身份 |
+| [BaseApiController](../../app/Http/Controllers/Api/V1/BaseApiController.php) | ApiAuthContext、活跃管理员与角色复核 | 直接调用业务服务不会自动执行这些入口检查 |
+| [ManagementSessionController](../../app/Http/Controllers/Api/V1/ManagementSessionController.php) | Token与管理策略求交集、能力过滤 | 提取共享授权规则，不能伪造Sanctum上下文 |
+| [ManagementInstance](../../app/Services/Api/ManagementInstance.php) | 实例ID、Core版本及恢复状态描述 | 现有protocol_version=1.0属于管理契约；实例ID初始化有数据库写入 |
+| [ArticleController](../../app/Http/Controllers/Api/V1/ArticleController.php)、[ArticleGeoFlowService](../../app/Services/GeoFlow/ArticleGeoFlowService.php) | 文章与质检服务 | 草稿专用状态、内容revision、资源范围和字段投影需补齐 |
+| [TaskController](../../app/Http/Controllers/Api/V1/TaskController.php) | need_review与发布权限联动、任务入队 | 控制器中的保护需下沉共享执行层；Worker快照和预算另验收 |
+| [ManagementOperationRegistry](../../app/Support/Api/ManagementOperationRegistry.php) | 操作注册与部分契约 | 旧业务API未完整纳入，不能直接当作完整MCP工具表 |
+| [IdempotencyService](../../app/Services/Api/IdempotencyService.php)、[CLI流程](../../.agents/skills/geoflow/references/remote-cli-workflow.md) | 幂等、收据、未知结果的既有约定 | 原生应用层保留语义，不依赖伪造HTTP请求头 |
+
+现有轻量质检状态不含完整证据；文章列表没有通用起止日期过滤；已查看的API路由未提供通用运营日志检索与统计入口。对应能力需补充授权查询服务，不能凭额外参数或读取少量分页声称已实现。
+
+## 4. 原生架构与代码边界
 
 ```text
-用户的自然语言请求
+ChatGPT对话 / 可选业务Skill
+    ↓ OAuth访问令牌，resource绑定当前实例
+实例HTTPS MCP端点
+    ↓ 认证、连接绑定、协议校验、限流
+MCP工具：严格参数、工具白名单、结果投影
+    ↓ 不可变ManagementExecutionContext
+共享管理应用服务：动作与资源授权、计划、事务、审计
     ↓
-ChatGPT插件：业务Skill + MCP工具定义
-    ↓ OAuth访问令牌，受众为MCP资源
-独立MCP服务：参数校验、用户绑定、权限交集、输出投影、操作日志
-    ↓ 服务端保管的、绑定到该账号/实例的GEOFlow受限凭据
-GEOFlow API：认证、资源授权、事务内前置条件、质量门禁
+现有领域服务、数据库事务、业务队列与Worker
     ↓
-原有业务服务与队列：草稿、质检、生成、发布、分发
-    ↓
-结构化结果：资源ID、收据ID、实际业务状态、覆盖范围与后续动作
+结构化结果：资源、revision、收据、状态、覆盖范围
+
+既有REST入口 → 从Sanctum构建同类执行上下文 → 共享管理应用服务
+可信后台页面 → 从admin登录态构建批准上下文 → 计划批准服务
 ```
 
-### 3.1 推荐部署形态
+MCP工具不得直接执行Eloquent写入或任意查询来绕过共享应用服务。数据库仍由GEOFlow现有数据访问层管理。只读查询也必须显式带入授权上下文；认证成功不能替代资源过滤。
 
-MCP服务建议使用TypeScript与经过兼容验证的MCP SDK，单独Docker容器部署。SDK、运行时与镜像在实施PR中锁定版本，不使用浮动latest作为生产基线。
-
-首次部署采用同一GEOFlow实例旁的sidecar，避免立刻建设集中托管所有客户凭据的网关。独立服务只能访问预登记的Core地址、授权服务和必要的密钥设施，不能挂载Docker socket、宿主机目录、Core数据库凭据或Updater socket。
-
-外部端点示例为`https://geo.example.com/mcp`，实际根路径、子目录、反向代理和自定义后台前缀均需测试。公网访问使用HTTPS；受控内部连接若使用HTTP，必须限定到精确的内部服务地址和隔离网络，不能让用户传入地址扩展访问范围。
-
-后续集中网关是独立的多租户项目，需额外设计租户路由、凭据隔离、域名绑定和跨实例测试。
-
-### 3.2 组件职责
-
-| 组件 | 负责 | 不负责 |
-| --- | --- | --- |
-| Skill | 操作流程、证据解释、失败时如何反馈 | 权限判断、保存密码、批准自身写入 |
-| MCP工具 | 稳定JSON schema、动作映射、上下文绑定、结果投影 | 通过任意HTTP/SQL工具绕过业务服务 |
-| OAuth授权服务 | 登录、同意页面、客户端注册、Token发行与生命周期 | 直接把外部身份映射为超级管理员 |
-| Core | 资源权限、事务、版本检查、质量规则、任务与发布效果 | 信任模型声明的admin_id或confirmed字段 |
-| 队列Worker | 执行已获准工作、检查快照/预算/撤销状态、记录结果 | 将入队成功直接标记为业务完成 |
-
-## 4. 身份、授权与撤销
-
-### 4.1 两套凭据严格分离
-
-ChatGPT到MCP使用OAuth访问令牌；MCP到Core使用受限的GEOFlow凭据。MCP不把收到的OAuth令牌原样转发给Core，不把Sanctum Token当作外部MCP访问令牌，也不复用一个全局超级管理员Token处理所有用户请求。
-
-建议连接绑定记录包含：
+以下目录和类名均为拟议结构，未创建：
 
 ```text
-connection_id
-issuer + subject
-instance_id + canonical_core_origin + base_path
-core_admin_id + credential_reference
-allowed_resource_scope + allowed_actions
-grant_version + expires_at + revoked_at
+app/Mcp/Servers/GeoFlowServer.php
+app/Mcp/Tools/{Connection,Articles,Tasks,Materials,Analytics}/
+app/Services/Management/{ManagementExecutionContext,ManagementAuthorizer}.php
+app/Services/Management/{DraftCommandService,GenerationCommandService}.php
+app/Services/Management/{OperationPlanService,OperationReceiptService}.php
+app/Services/Management/{OperationalLogQuery,OperationalMetricsQuery}.php
+app/Services/Mcp/{McpIdentityResolver,McpGrantService,McpTokenBinding}.php
+app/Http/Controllers/Admin/McpConnectionController.php
+app/Models/{McpPrincipal,McpGrant}.php
+routes/ai.php
+config/mcp.php
+integrations/chatgpt/{README.md,templates/,skills/,evals/}
+tests/Feature/Mcp/
 ```
 
-`subject`来自已验证的身份令牌或授权服务上下文，不能取自模型参数。绑定Core账号需用户在可信授权页面完成身份验证或经过管理员批准；仅按邮箱、昵称或用户提交的admin_id自动绑定不予接受。
+共享管理服务可以包装现有领域服务，避免第二套文章或任务实现。REST响应格式和原有CLI契约保持兼容；不要求首版重构所有后台模块，只提取本期开放能力实际依赖的授权与事务边界。
 
-最小权限以如下交集计算：
+## 5. 统一执行上下文与权限模型
+
+拟议ManagementExecutionContext包含：认证来源、可信principal标识、实际admin_id、instance_id、连接与grant版本、当前账号auth_version、资源范围、允许动作、request_id和恢复代际。对象只能由认证适配器构造；模型参数不能构造或覆盖它。
 
 ```text
-有效权限 = OAuth授权 ∩ Core账号当前权限 ∩ Core Token权限
-         ∩ 连接资源范围 ∩ MCP工具白名单 ∩ 当前阶段开关
+有效业务权限 = 当前管理员业务权限 ∩ 当前连接允许动作
+             ∩ 连接资源范围 ∩ 已实现工具白名单 ∩ 阶段开关
+             ∩ 当前授权/恢复状态
 ```
 
-任何一项无法确认时拒绝执行。首版不申请`*`、`articles:publish`、主题代码和Updater相关scope。服务端凭据放在密钥设施或受保护的加密存储中，日志和插件包不包含其明文。
+REST上下文额外受当前Sanctum Token能力限制；原生MCP上下文受验证后的OAuth授权及其绑定grant限制。不得给原生路径虚构一个全权Core Token，再沿用旧公式。
 
-### 4.2 OAuth兼容性
+每次调用在读取或写入前重查账号状态、角色、auth_version、grant_version、撤销状态及资源范围；高风险提交和Worker执行前再次验证。tools/list缓存不授予权限。权限扩大必须重新同意；现有令牌不得随账号升级或后台编辑grant而自动扩权。
 
-按照OpenAI当前插件认证文档与所选MCP协议版本实施授权码加PKCE流程，核对受保护资源metadata、授权服务发现、`resource`与访问令牌受众。客户端识别采用实际客户端支持的预注册、CIMD或DCR之一，不把DCR写成唯一必需选项。
+业务动作可以复用articles:read、tasks:read等现有语义；drafts:write、operations:read、analytics:read等新增名称需显式登记和契约测试。它们是应用层动作，不能在默认OAuth metadata里虚报为已支持的OAuth scopes。
 
-这是协议实现检查项，不代表引入某个OAuth库即可自动通过。需验证签名或令牌内省、issuer、audience、有效期、允许算法、scope、回调URI精确匹配、state及PKCE。采用成熟身份组件；自行新增的Core登录绑定与同意页面仍需安全测试。
+P0只承诺明确授权的整实例共享运营资料，并继续保留已有模型、提示词和知识库可见性限制。只有完成所有查询、详情、关联资源、计数和写入的范围校验后，授权页才能提供site_ids等更细粒度选择。site_id参数和拥有站点列表权限均不能替代数据隔离。
 
-刷新令牌是否发行、是否需要offline_access以及轮换规则应由实际身份服务配置明确决定。Refresh不能增加权限。认证失败、权限不足、网络失败应分别处理。
+## 6. OAuth实现路线与身份共存
 
-### 4.3 撤销及恢复
+### 6.1 组件选择和上线前验证
 
-断开连接首先在MCP侧撤销grant并阻止新请求，再撤销该连接专属Core凭据，不能撤销其他工具共用的Token。远端撤销失败必须记录为待清理，不能显示已经全部撤销。
+Laravel官方MCP提供Web服务与OAuth集成，可作为原生候选；其默认Mcp::oauthRoutes流程使用mcp:use，不能直接表达全部业务权限。[S01] 第一份实施PR必须验证PHP最低支持版本、现有Laravel版本、MCP组件与Passport依赖锁定、Admin身份适配、resource绑定以及真实客户端互通。验证失败时保留关闭状态，先记录具体兼容缺口。
 
-账号停用、权限降低、实例身份变化或恢复事件使相关缓存和待执行批准失效。已开始的模型调用可能无法即时取消，需返回真实状态。建议在Worker开始执行及外部发布前重查执行许可；未开始的相关工作应取消或停止，具体语义由Core实施PR定义。
+不要把两套HasApiTokens trait直接混入现有Admin，也不要直接修改默认web guard。优先验证独立McpPrincipal及专用OAuth provider/guard：principal保存不可变subject及对Admin的引用，不复制密码、角色或权限；同意页面仍要求有效admin登录态。OAuth服务只通过可信登录流程建立该引用。该桥接方式是拟议设计，需验证Passport和Laravel MCP的实际扩展点；组件默认行为不能当作已经完成桥接。
 
-数据库回滚可能恢复旧grant或丢失收据。紧急禁用与撤销代际应保存在不会随业务数据库回滚的管理边界中，或在恢复程序中强制使全部旧连接失效。恢复验收不通过时保持MCP写入关闭。
+同时验证授权码、访问令牌和刷新令牌都绑定到同一个grant。仅按admin_id或client_id查找“最新授权”会把多个连接混在一起，明确禁止。不得要求OIDC ID Token作为必需品；本地OAuth主体可以通过已验证令牌及服务端记录解析。业务调用使用访问令牌，不能把ID Token当成访问令牌。
 
-## 5. MCP协议与兼容策略
+### 6.2 实例授权流程
 
-公开HTTP端点采用Streamable HTTP，完成initialize、协议版本协商、tools/list和tools/call。Session ID仅用于传输会话；每次HTTP请求都进行身份验证和连接授权。若SDK使用有状态会话，要验证跨用户隔离、重启、过期和重连，不能用Session ID充当登录凭据。
+1. 管理员在本站启用MCP，完成实例身份、规范地址、OAuth密钥和允许客户端配置。
+2. ChatGPT连接实例MCP URL；未认证请求获得符合选定协议的401挑战与受保护资源metadata。
+3. 客户端发现本站授权服务；按实测能力使用预注册、CIMD或DCR。不能宣称组件默认支持全部方式。
+4. GEOFlow显示admin登录及同意页面，列出客户端、实例、数据范围、业务动作、有效期与外发说明。
+5. 服务端从当前登录态解析管理员，创建独立grant，将授权码绑定principal、client、resource、grant版本和PKCE。
+6. 客户端交换授权码，获得仅可访问当前MCP资源的访问令牌；每次工具调用验证其绑定与当前权限。
+7. 后台可以缩减或撤销grant；扩权需新一轮同意。刷新只延续原grant，不得跳转到其他连接或扩大权限。
 
-工具必须具有输入schema、输出schema、描述及符合实际副作用的annotations。`readOnlyHint`、`destructiveHint`、`idempotentHint`和`openWorldHint`只用于客户端理解，服务端仍需独立防护。查询私有数据也需要认证。
+OAuth授权码与PKCE S256、回调精确匹配、state处理、resource与受众校验、签名或可信令牌内省、期限和允许算法按选定实现验证。[S02][S06] 单有Passport默认Token签名校验不足以证明resource绑定已经满足要求；跨实例重放测试是硬门槛。
 
-固定工具表与版本化适配器共同决定可用范围：
+mcp:use只作为连接层许可。细粒度动作与资源记录在服务端grant，并在每次调用中执行。认证失败、OAuth scope不足、业务动作拒绝分别返回恰当错误；业务权限不足时不无限触发同一个mcp:use授权循环。
 
-1. 核对`auth/session`中的实例、账号和scope。
-2. 获取`capabilities`并记录协议版本与contract_hash。
-3. 对新管理操作要求服务端明确声明支持；对旧业务API使用经验证的映射与schema，不因注册表未列出就一概判为不存在。
-4. 未知版本、schema漂移、身份变化时关闭写入，返回具体兼容性错误。工具发现后发生权限变化，每次调用仍必须拒绝失效操作。
-5. 仅对确认身份后的旧版本404启用已验证的只读兼容模式。401、403、429、TLS或服务端错误不得解释为旧版。
-6. 不把覆盖清单中的pending条目转换成可调用工具，不把任意Web路由自动转换成MCP动作。
+### 6.3 凭据与密钥
 
-协议错误与业务失败分层返回。外层认证失败使用HTTP授权错误与发现信息；已经进入tools/call后的业务失败按所选SDK的工具错误契约返回，保留机器可读error_code和安全的后续动作。响应schema无法验证时拒绝把它解释为成功。
+每个实例持有自己的OAuth签名或验证配置；不在镜像、Git、插件包、日志或模型输出中提供秘密。原生MCP不额外签发本站Sanctum Token。旧REST Token不得在MCP入口被当成OAuth令牌，MCP令牌也不能被旧REST路径静默接受。原有CLI、浏览器运营助手和后台会话需要回归。
 
-## 6. 工具设计与能力范围
+是否发行refresh token、期限与轮换策略在实施PR中明确。只有支持并验证时才广告对应能力；不支持时明确需要重新登录。撤销必须覆盖该grant的授权码、访问与刷新令牌，不能误撤销其他连接或CLI凭据。
 
-以下工具名属于拟设计名称，尚未注册。HTTP路径为现有API v1内路径，只有表中明确写为“待新增”的能力才需要新的Core契约。
+## 7. 拟议数据模型与生命周期
 
-### 6.1 P0只读工具
+以下为逻辑实体，可复用现有可靠存储；不要求机械新增全部表。本PR不执行迁移。
 
-| 工具 | 现有接口 | 约束 |
+| 逻辑实体 | 必需信息 | 不变量 |
 | --- | --- | --- |
-| get_connection_status | GET /auth/session、GET /capabilities | 仅返回脱敏身份、范围及可用能力 |
-| get_catalog | GET /catalog | 投影ID、名称及必要配置元数据，不能整包转发 |
-| list_articles | GET /articles | 有限分页；支持的过滤项逐项白名单化 |
-| get_article | GET /articles/{id} | 有明确访问权限才读取正文；输出长度受控 |
-| get_article_quality_status | GET /articles/{id}/ai-quality/status | 轻量状态，不能冒充完整证据 |
-| get_article_quality_detail | 由文章详情中的ai_quality提取 | 专门的字段投影，避免无关正文与供应商日志 |
-| list_tasks、get_task | GET /tasks、GET /tasks/{id} | 保留现有viewer语义；隐藏不必要配置 |
-| list_task_jobs、get_job | GET /tasks/{id}/jobs、GET /jobs/{id} | 明确任务、执行记录、收据各自ID |
-| get_material_summary | GET /materials | 只读摘要，不默认导出知识库所有条目 |
+| MCP principal | subject、admin引用、instance_id | 服务端创建、映射不可被请求参数修改，无重复密码体系 |
+| MCP grant | grant_id、principal、client、resource、actions、resource_scope、版本、期限、撤销时间、auth_version与恢复代际 | 一次授权有独立记录；权限扩张不影响已签发授权 |
+| OAuth绑定 | code/token/refresh标识、grant_id、授权版本与令牌族 | 全流程绑定原grant；不存不必要的令牌明文 |
+| 操作计划 | plan_id、动作、规范化输入摘要、资源版本、成本上限、grant、期限、状态 | 计划生成后内容不可变；变更产生新计划 |
+| 批准记录 | plan_id、可信批准人、批准时间、摘要与版本 | 只能由可信页面或经过专项验证的客户端确认机制产生 |
+| 操作收据及派发记录 | operation_id、稳定请求ID、计划、执行状态、资源ID、outbox/派发标识 | 与业务变化一致；重复消费不能新增同一效果 |
+| 审计事件 | 工具、身份、资源、时间、耗时、错误分类与安全摘要 | 不记录密码、完整Token、聊天全文或默认保存正文 |
 
-为每个工具定义具体Core scope映射并写进契约测试。ID是服务器返回的业务标识，不能从文章标题猜测。实例地址、Token、admin_id和任意路由不属于模型可填写参数。
+建议grant状态为active、revoked、expired；计划状态为prepared、approved、executing、succeeded、failed、unknown、expired或cancelled。收据、工作执行与外部效果使用独立字段，不能用一个status覆盖全部语义。
 
-### 6.2 后续阶段的写工具
+去重唯一约束应包含实例、可信操作者、动作和稳定请求ID，并将计划与载荷摘要关联。相同ID不同内容冲突。刷新或重新认证后的收据查询仅在操作者和原授权关系可证明时允许，不能靠相同邮箱续接；撤销后可在可信后台查询审计，不因此恢复MCP访问。
 
-| 工具 | 实施要求 | 默认状态 |
-| --- | --- | --- |
-| prepare_draft_change | 生成确定字段与内容摘要的计划，不修改文章 | P1，待实现 |
-| commit_draft_change | 新增Core原子草稿写入契约，包含资源授权、状态/版本检查与收据 | P1，待实现 |
-| create_generation_task | 复用任务服务，固定待审模式、关闭自动调度/分发，并执行预算预留 | P2，待实现 |
-| enqueue_generation | 优先复用支持收据的tasks.enqueue，执行配置必须冻结或原子验证 | P2，待实现 |
-| prepare_publication、commit_publication | Core保存计划与可信批准，发布前重查质量、权限和渠道 | P3，待实现 |
+## 8. 后台连接管理与部署地址
 
-`prepare_*`、`commit_*`、草稿revision与业务批准记录均为本方案新增设计。现有API没有因此自动具备这些能力。具体路由名称在实施PR中通过统一注册表和OpenAPI导出，避免文档凭空承诺已上线接口。
+新增“AI连接”页面，提供启用状态、规范MCP地址、授权记录、当前能力、到期时间、最近访问、撤销和诊断。授权与批准页使用admin登录、CSRF及必要的重新认证；GET只展示，不修改业务。用户不需要把密码、验证码或访问Token粘贴到聊天。
 
-### 6.3 显式排除项
+根路径示例：`https://geo.example.com/mcp`。子目录示例：`https://geo.example.com/geoflow/mcp`。这些只是拟议外部地址，实际路径经部署验证。HTML后台地址不能充当MCP端点；自定义后台前缀只影响管理页面，不应隐式改变已登记的MCP资源。
 
-首版不提供删除、主题原生代码、Updater、恢复备份、风险放行、质量门禁覆盖、用户权限修改、API密钥管理、任意素材URL导入、浏览器外站自动发布或通用HTTP工具。
+规范resource来自可信配置，不能从未经校验的Host或转发头构造。包含路径的资源metadata发现应按规范映射，并在401中明确resource_metadata地址；授权服务issuer、其metadata与回调也要保持一致。[S06] 子目录不能只做字符串拼接，需要专项验收。
 
-这些能力即使存在Core API也不会自动出现在插件中。独立增加能力需要新的权限设计、威胁分析及相应验收。
+诊断检查TLS、路由、metadata一致性、组件/数据库准备状态和队列可用性，仅返回脱敏结果。诊断只针对本站已配置端点，不提供任意地址探测。不得让WAF验证码、HTML登录重定向或错误的代理缓存阻断MCP机器请求；OAuth登录页面继续保留浏览器安全保护。
 
-## 7. 草稿写入必须在Core侧补齐的保护
+## 9. MCP协议、版本与工具契约
 
-当前`updateArticle`在正文、标题等风险相关字段变化时会归一到draft/pending；若调用对象已经发布，可能改变其线上状态。因此“工具名叫修改草稿”不足以建立安全边界。
+使用经组件和客户端验证的Streamable HTTP；初始化、协议协商、工具发现、调用和错误响应遵循锁定版本。[S07] 不把资料引用的2025-11-25声明为当前唯一或最新版本；实施PR记录实际协议版本及兼容测试。
 
-P1实施要求：
+区分mcp_protocol_version、management_contract_version、core_version、tool_schema_version与contract_hash。现有管理接口的protocol_version=1.0不能复制到MCP initialize响应。原生工具通过已审查的注册表映射共享服务；不需要通过回环HTTP读取auth/session才建立身份。
 
-- 在Core事务中完成资源授权、当前状态检查、内容revision比较及写入，锁定的是实际文章行。
-- 新建限定为draft/pending；修改仅允许指定草稿状态。对象已发布、进入其他受保护状态或被删除时返回冲突，不自动下架原文。
-- 使用统一内容revision或等价强前置条件。Web、API、Worker等相关写入都需更新同一版本，不能只给MCP增加一个不会被其他路径更新的计数器。
-- 现有config_version用于部分质检配置检查，不能当成覆盖全文内容的通用并发版本。
-- MCP先GET再PATCH只能辅助显示差异，无法消除两个请求之间的竞争；MCP内部互斥锁也无法约束Web和Worker。
-- 仅允许title、content、excerpt、keywords、meta_description等经逐项确认的内容字段。status、review_status、task_id、质量配置、slug、URL及发布目标不混入普通草稿更新。
-- 需要确认的动作绑定计划ID、输入摘要、资源revision、账号、实例、grant_version和过期时间。`confirmed:true`或模型生成的说明不能代替批准记录。
-- 如需要最小化Core凭据的能力，增加专用草稿scope或等价Core策略。该scope为后续新增能力，不能在旧Token上凭空使用。
+所有业务工具需要认证；公开metadata只提供接入必需信息。Session ID仅作传输标识，不能代替身份。跨请求共享进程、容器单例和工具缓存不得保留上一用户的上下文。启用会话模式时验证重连、重启、过期、用户隔离和负载均衡行为。
 
-可信批准默认在GEOFlow已认证的确认页面完成。页面GET不执行变更，提交需CSRF保护和当前账号授权；秘密、验证码和批准凭据不要求用户粘贴到对话。未来接入ChatGPT受支持的可信确认信号时需单独验证，不能假定普通工具参数具有相同保证。
+每个工具定义严格inputSchema、outputSchema、稳定名称、触发条件、权限、副作用、错误及annotations。[S05] 未知参数默认拒绝；模型不能提供base_url、admin_id、grant_id、认证头、SQL或通用路由。合法业务ID来自工具返回，并在每次调用重新授权。
 
-草稿写入本身也可能触发质检与模型消耗，预算与结果描述需要包含这些副作用。
+| 工具组 | 拟议工具 | 数据/应用服务来源 | 阶段 |
+| --- | --- | --- | --- |
+| 实例与目录 | get_connection_status、get_catalog、list_sites | 共享身份/能力描述、目录与站点查询；保留现有可见性 | P0 |
+| 文章 | list_articles、get_article | 现有文章查询加授权、分页与字段投影 | P0 |
+| 质检 | get_article_quality_status、get_article_quality_detail | 轻量状态与完整证据分开返回 | P0 |
+| 任务 | list_tasks、get_task、list_task_jobs、get_job | 任务与执行记录查询，保留viewer语义 | P0 |
+| 素材 | get_material_summary | 素材摘要，默认不整库导出 | P0 |
+| 运营分析 | query_operational_logs、get_operational_metrics | 新增授权查询、时间口径和聚合服务 | P0A，可在只读接通后独立交付 |
+| 草稿 | prepare_draft_change、commit_draft_change | 新增计划与草稿命令服务 | P1 |
+| 操作核对 | get_operation | 计划/收据关联及当前权限检查 | P1起 |
+| 任务配置 | prepare_generation_task、create_generation_task | 固定待审、禁用调度和分发的任务计划与提交 | P2 |
+| 任务执行 | prepare_generation_run、enqueue_generation、stop_generation | 预算、执行快照、队列与明确的取消语义 | P2 |
+| 发布 | prepare_publication、commit_publication | 可信批准、质量与渠道约束 | P3 |
 
-## 8. 任务、预算、收据与不确定结果
+这些工具均待实现。现有REST路径仅用于契约对照，不能当成MCP已经存在的证明。注册表中的pending项不暴露；业务能力、权限或契约无法确认时返回unsupported或明确拒绝，不回退到更宽泛API。
 
-### 8.1 防止任务配置在执行前漂移
+只读工具不改变业务状态、不启动生成或质检；必要审计与限流记账明确登记。prepare类工具会持久化计划，应设置readOnlyHint=false；commit类按实际副作用标注。业务范围受限的私有查询与公开互联网访问分别判断openWorldHint，生成调用外部供应商时不得隐瞒外部副作用。annotations不承担权限或批准判断。
 
-已有TaskController会让缺少articles:publish的Token创建/修改的任务进入need_review模式，并阻止执行无需审核的任务。插件必须保留这些判断。
+### 9.1 草稿工具示例契约
 
-P2进一步要求：计划绑定任务revision、模型、提示词、知识来源、need_review、调度方式与渠道集合。排队时原子验证并保存执行快照；Worker按获准快照执行，或检测变更后停止。仅在MCP中检查一次need_review仍不足以保证后续执行配置不变。
-
-首次只提交单个明确的生成工作。批量生成使用每项独立ID、总预算预留和可核对汇总，不能用一次工具调用无限循环入队。
-
-预算建议包含每日调用量、生成篇数、最大并发、输入/输出Token上限、重试上限及质检/优化附加消耗。金额估计与已发生费用分开记录；只有上游计量完整才报告实际费用。未经可执行上限保护的模型调用不开放到P2。
-
-### 8.2 两套幂等语义分别适配
-
-旧业务写入使用`X-Idempotency-Key`；新任务收据使用`X-Client-Request-Id`，不能同时传入。请求ID由服务端的持久操作计划产生并复用，不由模型在重试时临时重生成。
-
-为每项操作登记是否支持幂等、是否有收据、指纹范围、保留期限和恢复方式。旧Token失效、重新登录后，不能假设旧幂等重放拥有与新收据相同的身份续接语义；未经验证时停止并对账。
-
-超时、502、进程崩溃、幂等记录stale、恢复后收据404，都可能对应结果未知。应保留请求日志与原ID，查询收据并核对业务结果。不能换ID、删除日志或重新提交来消除“不确定”提示。
-
-Core业务记录、操作收据与待派发工作需要事务一致性或等价可恢复机制。MCP日志只能帮助排查，不能单独实现跨服务exactly-once保证。
-
-### 8.3 状态与副作用分开表达
-
-建议响应字段如下，属于新MCP输出契约：
+以下是拟议参数格式，不是可直接调用的现有接口：
 
 ```json
 {
+  "mode": "update",
+  "article_id": 123,
+  "expected_revision": 7,
+  "changes": {
+    "title": "待审标题",
+    "content": "待审正文"
+  }
+}
+```
+
+prepare返回plan_id、规范化差异、输入摘要、预估副作用、有效期和可信确认页面位置。create模式不接收article_id或expected_revision；update模式二者必填。changes逐字段白名单，嵌套additionalProperties=false。提交工具仅接收plan_id，由服务端重新校验并消费批准，不能接受新的正文或confirmed=true覆盖既有计划。
+
+### 9.2 结果与错误
+
+```json
+{
+  "schema_version": "proposed-v1",
   "instance_id": "example-instance",
   "operation_id": "example-operation",
   "operation_state": "accepted",
@@ -226,85 +232,148 @@ Core业务记录、操作收据与待派发工作需要事务一致性或等价�
   "effects_state": "not_started",
   "resource_ids": [],
   "request_id": "example-request",
-  "as_of": "2026-09-18T00:00:00Z",
-  "next_action": "query_operation"
+  "as_of": "2026-09-19T00:00:00Z",
+  "warnings": [],
+  "next_action": "get_operation"
 }
 ```
 
-这些状态由具体适配器映射，保留必要的upstream_state以便核对。接受请求、执行完成、质检完成、主站发布与远端渠道发布分别报告。不能用HTTP 2xx、收据completed或生成出article_id证明文章已经全部发布。
+业务结果通过MCP结构化结果及必要的可读文本返回；工具业务失败采用SDK支持的工具错误格式，并保留机器可读error_code。认证错误在HTTP层返回恰当挑战。计划冲突、资源版本冲突、授权撤销、预算不足、功能关闭、结果未知与网络故障分别编码；不向模型暴露异常堆栈、数据库信息或密钥。
 
-同样，HTTP失败也不能一概解释为完全未写入。文章创建门禁可能保留草稿并返回阻断结果，需输出实际资源ID与副作用。部分渠道成功时返回逐渠道状态，撤回本地文章不保证外部渠道同步撤回。
+## 10. 安全草稿与可信批准
 
-首版使用有界状态查询，不承诺关闭对话后自动持续运行或主动通知。未来通知、Webhook或定时运营需独立定义事件鉴权、去重、重放和停止策略。
+当前普通文章更新可能把风险字段变化后的文章归一为draft/pending；它不能直接满足只修改草稿的窄契约。P1在共享应用服务及Core事务中同时验证管理员、连接、资源、当前状态和expected_revision，锁定真实文章行后修改。已发布、删除或受保护状态一律冲突，不隐式下架。
 
-## 9. 数据边界、统计与提示注入
+统一内容revision或等价强前置条件覆盖Web、REST、MCP、Worker及批量更新路径。现有config_version用于特定质检配置，不能替代全文版本。需要完成写入口盘点；未覆盖的写入口仍可能造成丢失更新，不能仅新增一个MCP计数器就开放P1。
 
-### 9.1 字段投影与证据
+允许字段逐项确认，例如title、content、excerpt、keywords、meta_description。status、review_status、task_id、slug、发布渠道和质量配置不混入普通草稿修改。正文按现有安全渲染与存储规则处理，防止通过草稿输入引入存储型脚本。
 
-各工具使用独立输出字段白名单。默认不输出密钥、Cookie、完整供应商请求/响应、内部文件路径、联系方式、线索数据和整库知识。正文与质检证据按用户目的读取，限制单次长度，保留resource_id、revision、来源定位和截断标识。
+计划绑定动作、内容摘要、资源revision、实例、管理员、grant版本、授权代际、预算和期限。确认页面展示差异及可能的质检费用；批准后任何绑定条件变化均使计划失效。首版可信批准在GEOFlow页面完成，POST受CSRF和当前账号保护；模型不能自签批准。ChatGPT自己的确认提示属于额外保护，不能在没有可验证信号时充当服务端批准证据。
 
-模型、提示词及知识库访问控制必须沿用Core实际规则，不能因为catalog:read而返回所有配置。工具错误与审计日志也执行同样脱敏。
+草稿保存若自动启动质检或其他付费过程，应纳入本次授权预算和收据；否则采用经验证的不自动启动模式。不能在工具描述中承诺零费用，同时让后台静默调用模型。
 
-部署者应在同意页面解释哪些企业内容会进入ChatGPT或其他授权处理方。部署地域、企业数据要求、保留期限与对话平台的数据设置分别确认；本方案不声称已完成任何法律或合规认证。
+## 11. 生成任务、预算与停止语义
 
-### 9.2 时间窗与完整性
+创建任务、开启调度、入队执行和完成生成是不同动作。P2首次创建固定need_review=true，关闭自动调度与对外分发；禁止用户输入通过嵌套参数改写它们。现有TaskController中的reviewBoundTaskData及assertTaskExecutionScope保护应提取到共享服务，REST与MCP共同回归。
 
-查询结果至少表达as_of、应用时区、使用的过滤条件、分页信息及是否完整。服务端时间转换为带时区时间戳，不能把不带时区的数据库字符串直接假定为UTC。
+prepare_generation_task生成配置计划；create_generation_task只提交已批准的禁用态配置。prepare_generation_run绑定任务revision、模型、提示词、知识源、数量、渠道集合与预算；enqueue_generation原子验证、预留预算并保存执行快照。Worker按快照执行或遇到漂移停止，不能在入队之后重新读取一套更高权限的当前配置。
 
-当前API不支持的时间筛选或聚合不得静默忽略。可以在明确页面/条数上限内计算“已读取样本”的结果并标为partial，或在后续Core PR中增加授权范围内的时间过滤与聚合。完整“最近7天”统计需要覆盖全部匹配数据，并处理分页过程中数据变化。文章数、渠道数与AI可见度之间不能自行建立不存在的数据口径。
+预算至少覆盖生成篇数、最大并发、输入输出Token上限、供应商重试、自动质检与优化附加消耗。金额上限只有在价格和计量可验证且实际可执行时才能承诺；否则明确报告估算，并使用篇数、Token等硬限制。预留原子化，未知或仍运行的工作不能提前释放全部预算。
 
-### 9.3 提示注入与外连
+stop_generation需要区分停止新调度、取消未开始Job、协作中止已开始Job。已经发给供应商的调用可能无法立即取消；已发生费用与生成结果保留。不能把现有task stop自动解释成已取消所有运行中工作。
 
-文章、素材、质检证据和日志均按不可信业务数据处理。其内容不能改变实例、提升权限、提交批准或触发新工具操作。输出中的网址仅作证据引用，不能自动成为网络请求目标。
+ChatGPT在对话中撰写正文并保存，与GEOFlow后台调用模型生成是两条路径。ChatGPT订阅不被视为GEOFlow供应商API额度；连接本身不要求用户向后台提供ChatGPT会话Cookie。后台生成继续使用已授权的GEOFlow模型配置，实际用量来源与未知费用明确标注。
 
-Core地址由部署配置绑定；模型不能提供base_url、认证头或重定向目标。对OAuth metadata、CIMD、JWKS以及其他必要发现请求施加HTTPS、目的地策略、大小/超时上限与重定向控制，防止配置与发现流程扩展成任意代理。内部服务例外必须精确登记，不能宽泛允许所有私网。
+## 12. 幂等、收据与派发一致性
 
-## 10. 运维、交付与插件安装
+原生应用层接收由持久计划产生的稳定请求ID，传给共享收据服务。旧REST的X-Idempotency-Key与新收据X-Client-Request-Id继续各自遵守契约，不能同时使用或静默删除保护；原生路径不需要伪造这两个HTTP头。
 
-实现应交付：MCP服务源码与锁文件、Docker部署样例、只含占位值的配置样例、工具契约、Skill、插件包、操作手册及测试报告。相关目录在未来实施PR中建立，本PR不创建假可运行脚手架。
+业务记录、计划消费、收据和待派发工作采用同事务或等价可恢复机制。建议评估事务outbox及幂等Worker：数据库已提交但派发失败时可恢复，派发成功但响应丢失时可核对。不得仅凭应用日志宣称全链路exactly-once，尤其不对外部供应商和渠道作此保证。
 
-插件包按当前官方格式选择root plugin.json、mcp.json及skills目录，或经过验证的兼容格式。二者schema不同，不能直接改文件名。现有开发者模式注册的MCP连接还可能需要真实的平台注册映射标识，禁止在公共示例中编造可用ID。
+同一计划并发提交最多产生一次本地业务效果；不同载荷复用ID报冲突。超时、502、崩溃、stale记录、旧Token续接或恢复后收据404均可能对应unknown。保留原ID，查收据、Job和实际资源，停止自动换ID重发。去重保留期与收据清理需要覆盖可重试窗口；清理不能让已消费计划再次执行。
 
-安装步骤分开验收：
+operation_state、work_state、effects_state分别表达受理、后台工作和外部效果。HTTP成功、收据完成或获得article_id均不证明全部渠道发布成功。失败返回也可能已经留下草稿，需要报告实际资源和副作用。撤回本站内容不保证外部渠道已撤回。
 
-1. 确认测试站点、Core版本、实例身份、数据范围与账号权限。
-2. 部署MCP端点与授权服务，完成metadata和协议联调。
-3. 在实际目标ChatGPT账号/工作区建立连接并授权；核对扫描出的工具。
-4. 单独验证MCP后再安装完整插件与Skill，重开会话验收。
-5. 工具schema/权限/metadata变化后刷新连接并重新执行相关用例。
+## 13. 结构化日志与运营统计
 
-开发者模式端点可使用公开HTTPS或当前平台支持的Secure MCP Tunnel。私网开发联调与公开目录提交具有不同要求，不能把隧道可用当成公开发布资格。账号、工作区、客户端和功能开关以实际验收为准；不同帮助页面描述的历史入口不得作为唯一安装路径。
+P0A补充OperationalLogQuery和OperationalMetricsQuery，复用已存在的数据源，不让MCP读任意文件或执行SQL。底层来源、字段映射和权限必须在实施PR逐项核对，缺少的数据返回unsupported或null及原因。
 
-建议运维保护：独立非root容器、最少出站权限、日志脱敏、健康检查、连接/用户级限流、响应大小限制、TLS及受信任代理配置、持久收据、密钥轮换、写入总开关及按连接禁用。
+日志拟议字段：event_id、occurred_at、task_id、job_id、article_id、request_id、stage、normalized_status、error_code、脱敏错误摘要、duration_ms、retry_index和可用的usage摘要。过滤字段采用枚举白名单；堆栈、Cookie、密钥、完整供应商请求响应、个人联系方式默认排除。
 
-审计记录包含工具、连接、账号、实例、授权版本、资源、计划、请求ID、结果状态、耗时及必要的前后摘要。无需保存完整聊天或业务正文。业务正文快照与审计事件分开授权、加密及设定保留期。
+统计优先覆盖任务运行数、成功/失败/取消/运行中数量、生成草稿数、质检结果、延迟与可验证用量。每项指标声明时间字段、分母、去重单位、是否计入重试、状态映射和空值语义；“任务成功率”不得混用任务配置数与执行次数。文章数量或分发数量不能推导不存在的AI可见度。
 
-MCP停机不应影响原Web后台。关闭插件并不回滚已执行的业务动作；回滚与补偿须逐项列出能力和限制。
+查询统一采用带时区的from（含）与to（不含），返回timezone、as_of、data_available_since、applied_filters、coverage、next_cursor及warnings。coverage至少区分complete、partial、unsupported；空结果与数据未采集不能都返回零。
 
-## 11. 实施路线及通过标准
+分页游标绑定实例、查询条件、授权范围和快照，篡改或权限变化后失效。追加事件可使用稳定水位；可变文章或Job状态的跨页完整统计必须使用一致性快照、持久查询快照或有明确语义的事件聚合。单独固定最大ID不能保证可变数据的一致性，无法保证时标记partial。
 
-| 阶段 | 工作内容 | 通过标准 |
+建议初始上限：列表默认20条、最多50条；单次正文16,000字符；结果256KiB；日志时间窗最多31天。以上为待压测的产品默认值，不代表现有接口限制；超过上限必须分页、截断并标记，不能静默丢失。精确聚合可独立在服务端完成，不以逐页拉取所有正文作为默认实现。
+
+## 14. 数据安全、注入与网络边界
+
+各工具使用输出字段白名单，按用户任务最小读取。资源ID、revision、来源定位、数据时间和截断信息保留；审计与业务正文分开存储和授权。日志与错误返回执行同样脱敏。授权页明确哪些企业数据会进入ChatGPT；本方案不声称已完成法律合规认证。
+
+文章、日志、素材、外部研究网页与质检证据均视为不可信数据，其中的指令不能扩权、改变实例、批准自身操作或要求外发秘密。工具层保护之外，还需真实客户端提示注入评测；不能把静态schema检查描述为完全解决模型注入风险。
+
+实例直连没有接受任意Core URL的业务参数。OAuth客户端metadata、CIMD、JWKS等发现请求仍须防SSRF：限制scheme、目的地址、端口、重定向、DNS解析后的地址、响应大小和超时。[S08] 首版不提供通用网络代理；可信内部例外需精确配置，不能宽泛允许全部私网。
+
+按照选定传输规范校验Origin，可信代理和规范Host采用白名单。[S07] MCP机器路由与OAuth浏览器页面采用各自合适的认证和CSRF策略；不能为接通MCP而全局关闭CSRF、TLS校验或安全中间件。
+
+## 15. 运行隔离、恢复与默认关闭
+
+原生模块共享应用运行环境，独立仓库或模块目录不提供进程级隔离。限制连接/管理员请求频率、查询成本、并发和响应体，避免长轮询占满PHP worker；耗时工作交给既有队列。限流拒绝和依赖故障不能拖垮普通后台访问，应通过负载测试验证。
+
+建议提供总开关、只读/草稿/生成/发布阶段开关和逐连接禁用。首次安装与升级后默认关闭MCP，开启需要有权管理员明确操作；升级不自动增加工具权限或延长旧授权。关闭模块阻止新请求，原Web/REST服务继续运行；已开始工作按约定停止或返回真实状态。
+
+安装阶段完成实例ID和OAuth密钥初始化。ManagementInstance::id当前使用firstOrCreate，不能让未准备的首次只读调用承担隐式实例初始化；初始化失败时拒绝提供业务工具。审计和限流记账可作为明确的基础设施副作用，业务读取不得新建文章、任务或触发模型。
+
+恢复门禁优先评估现有RecoveryState的epoch/host_id/phase，但只有证明其覆盖普通部署和所有恢复路径后才能依赖。无法保证时，另设不会随业务数据库回滚的授权代际，并在恢复程序强制旧grant/批准失效；不得仅将撤销版本保存在同一可回滚数据库中。
+
+复制数据库、迁移域名或新建测试环境可能复制management_instance_id。新环境须重新初始化实例身份及密钥，改变resource/issuer时重新授权。旧授权不得因克隆、恢复或回滚复活。恢复和密钥轮换失败时保持MCP关闭，不能回退到共享超级管理员Token。
+
+## 16. 安装、升级与插件分发
+
+实施版应交付原生模块与锁文件、环境变量说明、路由/metadata配置、迁移与备份说明、连接页面、工具契约、测试报告和撤销手册。仅Markdown方案不能被称为可安装版本。
+
+部署顺序：锁定兼容版本 → 在测试站备份并验证迁移 → 初始化每实例身份和密钥 → 配置HTTPS及代理 → 启用只读试点 → 完成MCP Inspector和真实ChatGPT验收 → 再开放已通过阶段。升级采用兼容性评估和必要的数据回填；回滚先关闭MCP，确认旧应用能处理已迁移结构，不盲目删除授权审计表。
+
+ChatGPT连接按当前官方页面操作，在开发者模式登记包括/mcp路径的端点并授权。[S03] 页面位置、套餐、工作区策略和模型支持记录到验收报告。公开HTTPS与受支持的开发隧道分别测试；开发隧道可用不能当作公开目录发布已通过。
+
+插件代码置于integrations/chatgpt，包含工作流、连接说明和经过验证的清单模板。portable格式与兼容格式使用各自schema；不能只改文件名。[S04] 公共模板不包含秘密或真实客户连接ID。需要平台注册映射时在本地/组织安装步骤绑定真实ID，不编造可用标识。
+
+一个固定远程URL的公开插件不天然支持任意客户实例。首版采用每实例手动直连与可选本地/组织分发；统一插件填写任意地址的体验留作独立兼容验证。确需中心网关时另做凭据托管、租户路由、SSRF、域名绑定和跨实例授权设计。
+
+## 17. ChatGPT客户端兼容与失败降级
+
+当前开发者文档列出Web开发者模式的Pro等账号及读写工具；帮助中心仍保留Pro仅read/fetch和部分模式限制的说明。[S09][S10] 文档口径存在差异，本方案不推断某个具体账号、Pro模型或对话模式已经获得全部能力。
+
+验收矩阵至少记录：账号套餐、个人/组织工作区、Web/桌面端、选定模型、普通对话/其他模式、OAuth客户端方式、工具读取/写入/刷新、完整插件安装及同意页面。每个组合分别标记PASS、FAIL、BLOCKED或NOT_RUN；不能用API Playground成功替代目标ChatGPT成功。
+
+客户端不支持写入时保持只读并明确限制，允许用户在GEOFlow后台完成操作；禁止把写工具伪装成只读工具或放到GET链接中绕过平台限制。首个受控写入必须使用测试草稿，不对生产内容做能力探测。
+
+已经入队的GEOFlow工作可由服务器继续执行；聊天关闭后，本方案不提供自动持续监控或主动通知。Webhook、定时运营与通知另行实现和授权，不凭MCP连接自动成立。
+
+## 18. 实施PR拆分与开放门槛
+
+以下编号是工作包，不代表已创建新的GitHub PR。各包先读仓库规则，保持小范围改动、明确依赖和实测证据；原PR#148作为方案入口保持开放。
+
+| 工作包 | 交付与依赖 | 必须验证 |
 | --- | --- | --- |
-| P0：只读试点 | 授权绑定、只读工具、数据投影、协议、版本和分页契约 | 身份正确、无越界数据、撤销生效、无隐式写入、结果可与后台核对 |
-| P1：草稿写入 | Core原子草稿接口、统一revision、计划/批准、幂等和收据 | 无覆盖他人修改、无误改已发布文章、重复提交不重复写、错误效果可核对 |
-| P2：受控生成 | 任务配置快照、预算、队列状态和重试恢复 | 无超预算、无自动发布漂移、取消/撤销语义明确、超时不重复生成 |
-| P3：发布协作 | 可信批准、质量快照、渠道集合、逐渠道回读 | 过期/变更批准失效、质量阻断不可绕过、部分成功和外部效果真实显示 |
-| P4：产品化 | 多实例、组织分发、兼容矩阵、公开目录材料 | 完成独立租户与客户端验收，无共享凭据或跨实例混用 |
+| D01：原生基础与身份 | 组件锁定、默认关闭、OAuth/Principal/Grant、共享授权、连接页面 | P0身份/协议、A49至A68适用项、真实读取A77 |
+| D02：只读工具 | 依赖D01；文章、目录、站点、任务、质检和素材投影 | A01至A20、相关运维及权限一致性；至少完整单实例读取闭环 |
+| D03：运营查询P0A | 依赖D02；结构化日志、时间过滤、指标和快照 | A15至A19、A69至A72；不依赖先开放写入 |
+| D04：安全草稿P1 | 依赖D02；全写入口revision、计划、可信批准、收据 | A21至A29、A73至A76及真实写入A78；包含保存触发质检的预算 |
+| D05：受控生成P2 | 依赖D04；任务配置/执行计划、预算、快照、Worker停止与恢复 | A30至A36、A72及A74至A78；回归已有审核保护 |
+| D06：受控发布P3 | 依赖D05；质量、文章及渠道快照、逐渠道效果、可信批准 | A37至A40及适用安全/恢复用例；保留渠道操作租约和删除保护 |
+| D07：插件交付P4 | 依赖已验收工具；Skill、清单、安装说明和评测 | A46、A77至A80；可独立于尚未开放的P2/P3功能交付 |
 
-每阶段由验收表的对应门禁控制，不用工具数量或API路由数量替代完成率。P0可以先交付；P1到P3不能在Core前置条件缺失时仅靠Skill提示开放。
+A41至A48为全阶段运维与回归基础。验收清单共80项，全部NOT_RUN；开放某阶段需前置阶段及适用新增项通过，不能只看区间内几项。实际P0单实例演示仍需第二账号和第二实例执行拒绝测试。
 
-## 12. 资料与复核方法
+## 19. 待实施PR回答的阻塞项
 
-仓库依据以第2节及配套复核报告中的固定提交为准。只做静态源码和文档交叉核对，尚未接入实际部署站点，也未执行端到端OAuth或业务测试。
+| 问题 | 默认处理 | 解除条件 |
+| --- | --- | --- |
+| MCP/Passport版本和扩展点兼容 | 组件与运行入口保持关闭 | 依赖安装、身份/受众绑定和真实客户端证据 |
+| 当前账号或模型写入支持不明 | 只读连接可独立交付 | 目标组合的A78通过 |
+| 细粒度资源隔离未完整验证 | 明确整实例范围，保留已有可见性规则 | 全入口授权矩阵通过后才显示细粒度选项 |
+| 全文revision与异步副作用不完整 | 不开放草稿提交 | 写入口盘点、并发和预算验收通过 |
+| 日志/指标缺少底层数据 | unsupported或partial，不填充假零 | 真实字段映射、保留期和聚合对照 |
+| 普通部署缺少可靠恢复代际 | MCP关闭，先补恢复门禁 | 恢复、克隆和撤销演练通过 |
+| 公开插件任意实例绑定未验证 | 单实例直连及已验证分发方式 | 客户端配置路径或另行评审的网关方案 |
 
-官方资料，访问日期为2026-09-18；实施时重新核验当前客户端与协议版本：
+## 20. 参考资料与证据说明
 
-- [OpenAI：插件认证](https://developers.openai.com/plugins/build/auth)
-- [OpenAI：插件打包](https://developers.openai.com/plugins/build/plugins)
-- [OpenAI：连接与测试](https://developers.openai.com/plugins/deploy/connect-chatgpt)
-- [OpenAI：工具定义](https://developers.openai.com/plugins/plan/tools)
-- [MCP：2025-11-25授权规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
-- [MCP：2025-11-25传输规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
-- [MCP：安全实践](https://modelcontextprotocol.io/specification/2025-11-25/basic/security_best_practices)
+外部资料访问于2026-09-19，实施时重新核对。编号仅用于本文与复核报告的定位；架构选择、数据模型、默认上限及阶段划分属于本项目设计。
 
-这些资料用于支持接口与安全要求的核对；阶段划分、GEOFlow操作计划、预算和验收门禁属于本方案的设计建议。
+- [S01 Laravel MCP](https://laravel.com/docs/12.x/mcp)：原生Web入口与认证组件边界。
+- [S02 OpenAI认证](https://developers.openai.com/plugins/build/auth)：MCP OAuth与客户端识别。
+- [S03 OpenAI连接与测试](https://developers.openai.com/plugins/deploy/connect-chatgpt)：实例接入和分层验收。
+- [S04 OpenAI插件打包](https://developers.openai.com/plugins/build/plugins)：清单、工作流与平台注册映射。
+- [S05 OpenAI工具定义](https://developers.openai.com/plugins/plan/tools)：工具契约和副作用声明。
+- [S06 MCP授权规范参考版本](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)：resource、metadata、PKCE和令牌边界。
+- [S07 MCP传输规范参考版本](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)：HTTP传输与安全要求。
+- [S08 MCP安全实践](https://modelcontextprotocol.io/specification/2025-11-25/basic/security_best_practices)：令牌、代理与发现安全。
+- [S09 OpenAI开发者模式](https://developers.openai.com/api/docs/guides/developer-mode)。
+- [S10 OpenAI帮助中心MCP说明](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt-beta)。
+- [S11 Laravel Passport](https://laravel.com/docs/12.x/passport)：OAuth组件适配时的基础资料。
+
+已有源码观察详见第3节和复核报告中的固定提交链接。本文未运行应用、OAuth或真实客户端测试；没有将文档一致性检查、CI或组件官方示例视为业务接入验收。
