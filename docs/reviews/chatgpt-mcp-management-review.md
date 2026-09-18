@@ -1,119 +1,204 @@
-# ChatGPT后台管理插件方案复核报告
+# GEOFlow原生MCP方案复核报告
 
-日期：2026-09-18。  
-代码基线：`9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1`。  
-关联：[完善后的方案](../plans/chatgpt-mcp-management-rfc.md) · [48项验收清单](../plans/chatgpt-mcp-management-acceptance.md)。
+修订日期：2026-09-19。源码基线：`9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1`。  
+本轮接续PR版本：`481394fc38b094bcf68c76092d67ee1489b391c3`。  
+关联：[原生MCP详细方案](../plans/chatgpt-mcp-management-rfc.md) · [80项验收清单](../plans/chatgpt-mcp-management-acceptance.md)。
 
-## 复核结论
+## 复核结论与范围
 
-基于现有API建设只读连接具有可行性。新增写入工具前，需要完成资源授权范围确认、Core事务内状态及版本检查、异步副作用管理和实际客户端授权验收。
+按维护者确认的方向，将主方案统一为单仓库内置MCP、随站点部署、每实例独立授权。插件负责工作流与分发；独立仓库和集中网关后置。本轮修改方案正文及配套文档，取代此前仅在PR评论中提出原生方向、正文仍默认sidecar的状态。
 
-本次识别12项接入风险或方案缺口。下面区分源码中直接观察到的行为、由此产生的设计要求，以及尚待测试的条件。它们不构成对生产站点的漏洞确认，也不代表代码修复已完成。
+保留并调整原R01至R12，新增R13至R20，共20项设计风险或实施缺口。下文“完善”表示已经写入文档的要求，均不代表运行代码已修复。80项运行验收仍全部NOT_RUN。
 
-### 证据范围
+证据包含原PR已核对的API路由、业务服务、Token、幂等和管理契约，本轮补查config/auth.php、Admin、BaseApiController、ManagementSessionController、ManagementInstance及CI，并再次核对OpenAI、Laravel和MCP官方资料。源码链接固定到上述基线；外部资料访问于2026-09-19。
 
-通过GitHub连接读取了API路由、文章与任务控制器、文章业务服务、Token与能力注册表、部分请求校验及幂等实现，同时核对仓库远程管理说明、CLI工作流、贡献规则和CI配置。参考了OpenAI当前插件认证、打包、接入说明及MCP规范。
+本地尝试访问GitHub仓库因DNS解析失败，文档读取与提交通过已授权GitHub连接完成。未运行PHP、JavaScript、数据库并发、OAuth、Inspector或ChatGPT端到端测试；未读取生产秘密、修改运行代码、创建独立仓库、合并或部署。静态发现不构成对生产漏洞的确认。
 
-本地Git克隆因无法解析github.com失败，后续读取和文档提交使用已授权GitHub连接完成。未运行PHP/JavaScript测试、数据库并发测试、MCP Inspector、OAuth联调或线上业务操作。未读取生产凭据或客户数据。源码链接在本报告固定到审查提交，实施时应重新核对。
+## R01：OAuth与Sanctum边界改为原生双入口
 
-## R01：MCP授权与Core Token的边界需要明确
+**观察。** [ApiTokenService][C01]提供Sanctum能力，不能单凭Bearer接口证明具备ChatGPT OAuth连接。旧方案要求MCP到Core再使用专属Token，该假设与本轮原生同进程调用不匹配。
 
-**观察。** [ApiTokenService](https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Services/Api/ApiTokenService.php)提供Sanctum Token能力。[OpenAI认证文档](https://developers.openai.com/plugins/build/auth)描述OAuth发现、PKCE、resource和客户端识别要求。单独存在Bearer Token接口不能证明已经支持完整MCP授权。
+**完善。** 原生MCP使用OAuth令牌及其grant构建执行上下文；REST继续使用Sanctum。两入口进入同一授权应用服务，不回环HTTP、不额外签发本站Token。OAuth身份不得伪装成Sanctum上下文，也不使用全局超级管理员凭据。
 
-**完善。** 分离ChatGPT到MCP的OAuth凭据与MCP到Core的专属凭据；在可信页面绑定OAuth主体、Core账号和实例；按当前客户端能力选择预注册、CIMD或DCR。不得把静态管理员密钥写进插件包，不得用邮箱相同自动绑定超级管理员。
+**验收。** A03、A04、A10、A53、A55。独立适配服务未来另行评审时可重新讨论两套服务间凭据，首版不引入。
 
-**通过要求。** 授权码流程、错误受众拒绝、scope交集、账号绑定和凭据不透传通过P0验收。
+## R02：业务scope不等于逐客户或逐站点隔离
 
-## R02：scope不能直接证明存在逐客户数据隔离
+**观察。** [ArticleController][C02]普通列表与详情没有显式viewer参数，任务入口存在相应viewer语义。仅凭这些方法不能断言整个应用的全局资源策略，也不能证明已存在可利用的跨租户问题。
 
-**观察。** [ArticleController](https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Http/Controllers/Api/V1/ArticleController.php)的普通列表与详情调用没有显式传入viewer；[ArticleGeoFlowService](https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Services/GeoFlow/ArticleGeoFlowService.php)的对应方法直接构建文章查询。任务API则有显式viewer参数。仅凭这些入口不能确认整个系统的全局策略或租户隔离，不能据此声称存在已证实的跨租户漏洞。
+**完善。** P0明确整实例共享运营数据范围，同时保留已有模型/提示词/知识库可见性。只有列表、详情、计数、关联资源和写入都经过范围验证后，连接页才提供更细粒度资源选择。site_id及站点列表权限不替代授权。
 
-**完善。** 首版明确授权整实例共享运营资料，或先补齐并验证Core资源策略。涉及多客户时要在Core落实列表过滤、单条访问、关联素材与写入授权，不能只依靠模型传入site_id。
+**验收。** A09、A11、A54、A69、A71。
 
-**通过要求。** 同一实例不同账号、不同实例同一资源ID、直接访问详情及关联资源都应按已声明范围验收。范围无法确认时不开放对应工具。
+## R03：通用文章更新不能直接作为草稿命令
 
-## R03：普通文章更新可能影响已发布内容
+**观察。** [ArticleGeoFlowService][C03]的updateArticle在风险字段变化后可能归一为draft/pending。通用更新有其现有业务含义，不能直接赋予“绝不影响已发布内容”的更窄保证。
 
-**观察。** `ArticleGeoFlowService::updateArticle`处理标题、正文等风险相关字段变化时，会合并draft/pending回退状态。这个流程服务于现有文章管理；它不能直接承担“仅修改草稿”的更窄插件契约。
+**完善。** Core共享命令在同一事务内校验身份、资源、草稿状态和预期版本。已发布或受保护状态返回冲突，不隐式下架；草稿工具不透传任意状态、渠道和质检覆盖参数。
 
-**风险。** 仅在MCP层先GET检查文章状态，随后PATCH，仍可能在两次请求之间遇到Web操作把文章发布。最终写入可能改变线上文章状态。
+**验收。** A21、A23、A25、A29。
 
-**完善。** 新增或收紧Core草稿专用契约，在同一事务中验证资源权限、草稿状态和预期版本。已发布对象必须返回冲突，不能隐式下架。该保护缺失时，P1写入保持关闭。
+## R04：全文并发版本必须覆盖所有相关写入口
 
-## R04：质检配置版本不能替代全文并发版本
+**观察。** [UpdateArticleRequest][C04]及现有控制器使用config_version处理特定配置检查；不能据此推断普通正文更新拥有统一CAS。现有事务和行锁继续有价值，本发现不否定它们。
 
-**观察。** [UpdateArticleRequest](https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Http/Requests/Api/UpdateArticleRequest.php)和ArticleController中，config_version用于部分质检配置或任务关联变化的检查。已读普通正文更新路径没有等价的通用预期内容版本校验。业务服务已有事务和行锁，本发现不否定这些现有并发保护。
+**完善。** 明确内容revision及强前置条件，盘点Web、REST、MCP、Worker和批量写入。所有相关修改推进同一版本；MCP自己的计数器或内存锁无法约束其他入口。计划及可信批准绑定revision。
 
-**完善。** 为草稿操作设计统一revision或等价强前置条件；Web、API和Worker的相关内容修改都更新同一版本。仅有行锁不自动发现“用户看到旧正文后提交的新修改”，仅有MCP内存锁也约束不了其他入口。
+**验收。** A24、A26、A74；缺少写入口覆盖时不开放P1。
 
-**通过要求。** 两个操作者基于同一版本修改，最多一个成功；冲突后重新读取和生成计划，不覆盖他人内容。
+## R05：已有待审保护必须进入共享服务及Worker路径
 
-## R05：任务已有审核保护，执行快照仍需验证
+**观察。** [TaskController][C05]的reviewBoundTaskData与assertTaskExecutionScope已对缺少发布权限的Token实施待审约束。本轮未做完整动态Worker测试，不能宣称存在已验证竞态漏洞。
 
-**观察。** [TaskController](https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Http/Controllers/Api/V1/TaskController.php)的reviewBoundTaskData会对缺少articles:publish的Token强制need_review；assertTaskExecutionScope会阻止此类Token启动可自动发布的任务。原方案需要明确保留这些已有防护。
+**完善。** 提取为REST与MCP共用的规则。创建、调度、入队和完成分开；计划绑定模型、提示词、知识源、渠道、审核模式及版本，Worker使用批准快照或拒绝漂移。加入篇数、Token、并发、重试及附加质检预算。
 
-**待验证。** 本轮没有完成从所有任务写入口到Worker的全链路动态测试，不能断言队列执行存在可利用的竞态。
+**验收。** A30至A33、A72、A76；现有task stop不能自动被解释为全部运行工作已取消。
 
-**完善。** P2要求任务计划绑定模型、知识源、提示词、渠道、审核模式及revision；入队原子验证，并由Worker使用获准快照或检测漂移后停止。增加篇数、Token、并发和附加质检费用的预算约束。
+## R06：原生工具注册与管理契约需要明确映射
 
-## R06：capabilities没有覆盖全部旧业务API
+**观察。** [ManagementOperationRegistry][C06]没有完整覆盖旧文章、目录与素材API，[覆盖说明][C07]也保留嵌套schema缺口。旧注册表不能直接变成全量工具列表。
 
-**观察。** [ManagementOperationRegistry](https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Support/Api/ManagementOperationRegistry.php)包含管理操作与tasks.enqueue，但没有完整列出旧文章、目录及素材接口。[远程管理覆盖说明](https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/docs/api/remote-management-preview.md)也声明嵌套schema未全部完成。
+**完善。** 维护经过审查的工具白名单及共享服务映射，按权限和阶段暴露。原生路径不再依赖回环auth/session发现身份；旧REST兼容保持，未实现或未知契约明确拒绝，不自动暴露pending路由。
 
-**完善。** 新管理操作依赖服务端声明，旧API使用版本化兼容映射与契约测试。工具列表来自经过审查的白名单，不把Web路由或pending台账自动暴露。schema漂移及未知版本关闭写入。
+**验收。** A13、A14、A20、A59、A60、A80。
 
-**通过要求。** 既不能误宣称某个未实现能力可用，也不能只因旧API未在注册表列出就错误地判定其不存在。
+## R07：幂等、操作收据与HTTP状态各有边界
 
-## R07：幂等、收据和HTTP状态需要分别解释
+**观察。** [IdempotencyService][C08]存在stale/uncertain等处理；[远程CLI流程][C09]说明恢复后收据缺失不能证明未执行。旧幂等头与新收据头不同，任务入队不能同时接受两者。
 
-**观察。** [IdempotencyService](https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Services/Api/IdempotencyService.php)含in_progress、stale和uncertain等处理；任务入队明确拒绝同时传入两种幂等头。[远程CLI规范](https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/.agents/skills/geoflow/references/remote-cli-workflow.md)说明恢复后收据缺失不能证明未执行。文章创建流程还可能保留草稿并返回门禁阻断。
+**完善。** 原生服务直接使用稳定业务请求ID和收据，不伪造HTTP头。REST保留既有契约。对超时、响应丢失、去重记录清理和重新认证逐项定义恢复策略，unknown停止自动重发；相同计划不能通过新ID或新Token重复执行。
 
-**完善。** 逐操作登记幂等和恢复契约；持久化同一业务计划的请求ID；超时后优先查收据与实际资源。HTTP失败不能直接显示“没有任何变化”，HTTP成功也不能直接显示“发布完成”。
+**验收。** A22、A28、A35、A36、A75、A76。
 
-**通过要求。** 重试、崩溃、旧Token续接和恢复后的404都必须有确定处理方式，无法确定时保留unknown并停止自动重发。
+## R08：受理、后台执行与外部效果必须分开汇报
 
-## R08：一次工具调用可能对应多个后续状态
+**观察。** 现有任务、Job、文章、质检和渠道分发有不同状态与查询入口；生成文章ID不证明全部流程成功。
 
-**观察。** 任务与执行记录通过不同API查询，现有工作流涉及生成、质检、审核和分发。仓库CLI文档明确禁止将pending报告为完成。
+**完善。** 结果保留operation_state、work_state、effects_state和对应ID。明确部分失败、已保存草稿、已发生费用与逐渠道结果。取消或关闭聊天不等于回滚外部效果；MCP首版不提供会话结束后的自动监控和通知。
 
-**完善。** 将operation_state、work_state和effects_state分开；记录任务、Job、文章及收据的不同ID。输出逐渠道效果，说明尚未完成和已发生的部分副作用。
+**验收。** A22、A33、A34、A39、A72、A76。
 
-**通过要求。** 入队成功、收据完成、生成成功、质检通过和远端发布分别核对。首版不承诺会话结束后的主动通知；计划中的定时任务需要单独实现。
+## R09：证据、可见性和输出脱敏需要逐工具定义
 
-## R09：轻量质检状态不能承担证据分析
+**观察。** [ArticleController][C02]轻量质检状态与完整ai_quality详情分开；[CatalogController][C10]将审计管理员交给目录服务。不能整包转发这些结果，也不能把状态接口当完整证据。
 
-**观察。** ArticleController的aiQualityStatus注释明确说明轻量响应不包含文章正文、证据正文或供应商错误；getArticle另行返回ai_quality详情。[CatalogController](https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Http/Controllers/Api/V1/CatalogController.php)将当前审计管理员ID交给目录服务。
+**完善。** 质检状态和详情分别投影，保留必要来源/版本/截断标识。沿用目录与知识配置可见性；模型输出、日志和异常都不包含秘密、无关个人数据或完整供应商请求响应。内容与证据作为不可信业务数据处理。
 
-**完善。** 分开状态工具与详情工具，按用途投影字段。保留Core已有模型可见性规则，不整包转发目录、供应商日志和知识库。未经完整字段复核，不能宣称所有API输出都已脱敏。
+**验收。** A11、A12、A17至A19、A45、A69。
 
-**通过要求。** 结果保留来源定位、版本及截断信息，同时不泄露密钥、无关个人数据和后台配置。日志及错误路径执行相同限制。
+## R10：运营统计需要真实口径、快照和覆盖边界
 
-## R10：最近7天的统计需要真实的时间过滤和覆盖信息
+**观察。** 已读文章列表没有通用from/to过滤，已有路由未提供通用运营日志/聚合入口。部分时间字段不带时区，少量分页不能代表整站统计。
 
-**观察。** 已读文章列表控制器没有通用from/to时间过滤；服务返回分页信息，详情部分时间字段格式为不带时区的字符串。
+**完善。** 独立D03/P0A提供结构化授权查询，明确from含/to不含、时区、数据保留起点、分母、重试和取消口径。可变数据的跨页完整统计需要一致性策略，单固定最大ID不足；没有数据时返回unsupported/null或partial，不能补假零。
 
-**完善。** 工具不能发送服务器忽略的过滤参数后声称统计完整。可以只报告受限分页内的样本，显式标记partial；完整统计需补充授权范围内的过滤与聚合，明确时区、as_of及分页期间的一致性策略。
+**验收。** A15、A16、A69至A72。日志不能通过任意文件读取或通用SQL工具替代。
 
-**通过要求。** 跨时区、夏令时、零结果、多页结果和同步变更均有可核对语义。不能把前20篇的统计包装成全站周报。
+## R11：撤销与数据库恢复不能让旧授权复活
 
-## R11：撤销、恢复与实例绑定需要形成闭合流程
+**观察。** [ManagementInstance][C13]将实例ID存于业务设置表，并返回现有RecoveryState的恢复信息。复制或恢复数据库可能复制旧身份；现有恢复字段不能证明所有部署形态已覆盖。
 
-**观察。** Token服务已有过期、停用账号及恢复相关校验；它们只证明相应Core逻辑存在，不能证明未来OAuth层与MCP缓存会自动同步。
+**完善。** 撤销绑定grant的授权码、访问与刷新令牌，影响相关计划和未开始工作，保留其他连接及CLI Token。验证现有恢复代际的覆盖范围；不足时使用不会随业务库回滚的边界。克隆、迁移域名和新环境重新初始化身份/密钥及授权。
 
-**完善。** 连接绑定主体、实例、账号和grant_version；每次调用重查权限；本地撤销先阻止新调用，再处理远端专属Token。业务数据库恢复后，使旧批准与连接失效，或依赖不会随该恢复回滚的撤销边界。基础地址及必要的身份发现请求实行目的地约束。
+**验收。** A08、A41、A42、A65至A67。清理失败如实标记，不显示全部撤销或自动恢复可用。
 
-**通过要求。** 撤销失败不得显示全部撤销；替换实例、恢复旧库、Token过期及排队工作都需测试。禁止模型参数改变请求主机和凭据。
+## R12：方案、运行实现与插件发布各自验收
 
-## R12：插件打包、客户端接入与实施验收不能混为一项
+**观察。** 原PR只含文档。OpenAI官方分别说明MCP连接测试和完整插件安装，公开发布也有独立要求。[S03][S04]
 
-**观察。** [当前打包文档](https://developers.openai.com/plugins/build/plugins)区分portable root manifest与兼容格式；[连接文档](https://developers.openai.com/plugins/deploy/connect-chatgpt)区分公开HTTPS、开发隧道、实际账号策略与工具元数据刷新。
+**完善。** 方案与验收编号同步，所有拟新增类、工具、表和路由明确标注未实现。实际插件放在本仓库integrations/chatgpt，首个读取闭环不依赖公开目录。80项测试不得被文档检查或原有CI替代；CLA声明仍由有权主体确认，本次不代签。
 
-**完善。** 先验收MCP，再验收完整插件与Skill，最后考虑组织内或公开目录分发。新增字段、工具annotations、会话隔离、协议协商、代理路径、SDK锁定、密钥管理和禁用开关。公开示例不包含真实连接ID、秘密或个人客户数据。
+**验收。** A46、A48、A77至A80。
 
-**通过要求。** 使用实际ChatGPT账号完成完整安装与授权流程；文档PR只能声明设计完成，不能声明48项未来测试已通过。仓库PR模板中的CLA法律声明由有权主体确认，本次不代为签署或填写法定身份。
+## R13：Laravel MCP默认OAuth权限粒度有限
 
-## 完善后的实施决策
+**观察。** Laravel MCP文档说明默认oauthRoutes使用单一mcp:use，不能直接承担全部自定义业务scope需求。[S01] 存在官方组件不证明其在GEOFlow已经可用。
 
-优先交付P0只读试点。P1补齐Core安全草稿接口，P2增加配置快照和预算，P3才开放可信批准后的发布。高风险主机操作和任意代码继续排除。各阶段都通过对应验收后独立开放，默认关闭未验证能力。
+**完善。** mcp:use作为连接层许可；业务actions及resource_scope保存在服务端grant并逐次检查。metadata只广告真实支持的OAuth scopes；业务权限拒绝与OAuth挑战分开，避免循环授权。组件版本与扩展点先通过D01验证。
 
-这份报告记录静态复核与设计决策；运行时安全结论、兼容版本范围、生产部署与测试通过情况应由后续实施PR提供独立证据。
+**验收。** A04、A50、A54、A56。
+
+## R14：管理员、普通用户与Token模型不能混用
+
+**观察。** [config/auth.php][C11]默认web对应users，admin对应admins；[Admin][C12]已使用Sanctum HasApiTokens并具有auth_version。直接套用OAuth用户示例可能绑定错误账号，增加同名trait也存在集成冲突风险，尚未做安装验证。
+
+**完善。** 优先验证独立McpPrincipal及专用OAuth provider/guard，由有效admin登录态建立不可变映射，不复制密码或静态权限，不改默认web。保留原Sanctum认证及CLI、浏览器运营助手；MCP与Passport扩展点不支持该方式时先修订ADR，不能假装桥接已完成。
+
+**验收。** A10、A51至A53、A55。
+
+## R15：跳过控制器可能遗漏既有管理保护
+
+**观察。** [BaseApiController][C14]依赖ApiAuthContext，并在executionAdmin重新检查活跃状态与角色；[ManagementSessionController][C15]对Token及ManagementScopePolicy求交集。直接调用业务服务不会自动执行这些入口逻辑。
+
+**完善。** 抽出不可变执行上下文、共享Authorizer及命令服务，分别从可信OAuth、Sanctum、admin会话构造。身份、动作、资源和恢复校验存在于共同执行路径，不能靠模型参数或MCP工具名保证。只重构本期依赖的边界，避免复制业务实现。
+
+**验收。** A05、A09、A30、A57、A59、A74。
+
+## R16：授权码与令牌族必须绑定准确的grant
+
+**设计风险。** 原生系统同一管理员可对同一客户端产生不同范围的授权。若换取令牌或refresh时只取该账号最新grant，可能无意扩大权限；原RFC未给出此项独立不变量。
+
+**完善。** principal、client、resource、grant及其版本贯穿授权码、访问与刷新链。scope增加需要重新同意；OAuth subject从验证后上下文解析，不要求模型提供或依赖邮箱关联。签名验证之外还要验证resource、类型和当前授权。
+
+**验收。** A03、A04、A26、A41、A55、A56、A74。
+
+## R17：每实例直连需要完整地址与代理契约
+
+**设计风险。** GEOFlow可使用子目录和自定义后台路径。OAuth metadata、issuer与MCP resource的路径处理不同；信任任意Host、转发头或重定向还会污染发现流程。
+
+**完善。** 规范地址来自可信部署配置，401声明正确metadata位置，根目录与子目录分别测试。OAuth浏览器页面保留CSRF，机器路由使用正确的令牌校验；不全局关安全机制。发现请求继续限制网络目的地。普通后台HTML URL不能直接当MCP端点。
+
+**验收。** A02、A19、A44、A61至A63。
+
+## R18：管理协议版本与MCP协议版本须分离
+
+**观察。** [ManagementInstance][C13]返回protocol_version=1.0，该字段属于现有远程管理契约。它不能直接成为MCP initialize的协议版本。
+
+**完善。** 分开MCP协议、管理契约、Core、工具schema和contract_hash。组件及实际支持版本在实施PR锁定；规范引用版本不被描述为当前唯一最新版本。客户端缓存旧工具时仍重查权限，兼容失败明确关闭能力。
+
+**验收。** A01、A13、A48、A59、A60、A80。
+
+## R19：原生模块共享资源，且只读入口可能隐式初始化
+
+**观察。** [ManagementInstance][C13]的id使用firstOrCreate；原生模块与主应用共享进程/资源。模块目录隔离无法自动保证只读无业务变更或后台不被慢请求耗尽。
+
+**完善。** 部署/启用阶段完成实例初始化，未就绪时拒绝业务调用。只读不启动质检或生成，审计与限流记账单独声明；prepare会写计划，按有状态工具标注。设置查询/并发/响应上限，耗时任务入队，按实例演练禁用与负载隔离。
+
+**验收。** A17、A44、A47、A49、A58、A64、A65、A73。
+
+## R20：Pro与统一插件任意实例连接不能凭文档推定
+
+**观察。** OpenAI开发者模式页面列出Pro等账号和读写支持，帮助中心仍保留Pro仅read/fetch等限制，实际入口与模式说明存在差异。[S09][S10] 插件固定URL和平台注册映射也不能证明动态任意实例绑定已完成。[S04]
+
+**完善。** 按账号、客户端、模型、对话模式、工作区策略分别验证。先完成每实例直连，插件使用真实本地/组织映射；不创建假ID，不打包客户凭据。不支持写入时保持只读，不能通过伪造annotations或GET副作用绕过限制。集中网关另立项目评审。
+
+**验收。** A46、A77至A80；目标账号真实接入仍为NOT_RUN。
+
+## 实施与证据闭环
+
+D01、D02交付原生身份及只读；D03独立补运营查询；D04安全草稿；D05受控生成；D06受控发布；D07插件交付。授权、预算、收据、恢复及客户端实测随对应阶段推进，未通过能力默认关闭。详细依赖见RFC第18节。
+
+本轮解决的是方案表述与方向不一致，并补充实施要求；没有证明任何运行风险已经消除。后续实现PR应逐项引用R编号、A编号和真实证据。文档状态、CI状态、运行验收、合并和部署分别报告。
+
+## 固定源码与官方资料
+
+[C01]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Services/Api/ApiTokenService.php
+[C02]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Http/Controllers/Api/V1/ArticleController.php
+[C03]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Services/GeoFlow/ArticleGeoFlowService.php
+[C04]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Http/Requests/Api/UpdateArticleRequest.php
+[C05]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Http/Controllers/Api/V1/TaskController.php
+[C06]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Support/Api/ManagementOperationRegistry.php
+[C07]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/docs/api/remote-management-preview.md
+[C08]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Services/Api/IdempotencyService.php
+[C09]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/.agents/skills/geoflow/references/remote-cli-workflow.md
+[C10]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Http/Controllers/Api/V1/CatalogController.php
+[C11]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/config/auth.php
+[C12]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Models/Admin.php
+[C13]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Services/Api/ManagementInstance.php
+[C14]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Http/Controllers/Api/V1/BaseApiController.php
+[C15]: https://github.com/yaojingang/GEOFlow/blob/9ed2fe80457d5eb280a4bca7cf799895bf2ca3b1/app/Http/Controllers/Api/V1/ManagementSessionController.php
+[S01]: https://laravel.com/docs/12.x/mcp
+[S03]: https://developers.openai.com/plugins/deploy/connect-chatgpt
+[S04]: https://developers.openai.com/plugins/build/plugins
+[S09]: https://developers.openai.com/api/docs/guides/developer-mode
+[S10]: https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt-beta
