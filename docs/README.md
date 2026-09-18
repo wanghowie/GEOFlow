@@ -20,6 +20,12 @@
 - [Chrome 运营助手](browser-operations-runbook.md)。
 - [GEOFlow CLI](GEOFLOW_CLI.md) · [CLI English guide](GEOFLOW_CLI_en.md)。
 
+## 开发与集成方案
+
+- [ChatGPT插件与MCP后台管理方案](plans/chatgpt-mcp-management-rfc.md)：拟议架构、授权边界、工具契约与分阶段实施；尚未实现或部署。
+- [插件方案复核报告](reviews/chatgpt-mcp-management-review.md)：12项接入风险或设计缺口、源码依据及验证边界。
+- [插件实施与验收清单](plans/chatgpt-mcp-management-acceptance.md)：48项后续验收规格，当前均未执行。
+
 ## Wiki 与维护者资料
 
 - [Wiki 首页](https://github.com/yaojingang/GEOFlow/wiki)：使用场景、知识库、分发、主题和常见问题。
