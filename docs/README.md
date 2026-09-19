@@ -5,7 +5,7 @@
 ## 安装与升级
 
 - [3.1 升级说明](deployment/GEOFLOW_V3_1_UPGRADE.md) · [English instructions](deployment/GEOFLOW_V3_1_UPGRADE_en.md)：配套 Updater 0.4.0、旧版后台的首次升级、未受管站点桥接及维护窗口。
-- [3.0 升级教程](deployment/GEOFLOW_V3_UPGRADE.md) · [English instructions](deployment/GEOFLOW_V3_UPGRADE_en.md)：版本选择、备份、普通 Compose 升级、Updater 接管、数据回填、验收和故障恢复。
+- [3.0 升级教程](deployment/GEOFLOW_V3_UPGRADE.md)：版本选择、备份、普通 Compose 升级、Updater 接管、数据回填、验收和故障恢复。
 - [蓝绿部署与自动迁移教程](blue-green-deployment-usage.md) · [English tutorial](blue-green-deployment-usage_en.md)：签名安装、旧站接管、后台与 CLI 升级、备份和恢复；适用发布版本见教程开头。
 - [生产 Docker 部署](deployment/DEPLOYMENT.md)：首次安装、环境配置、反向代理和运行进程。
 - [初始化问题排查](deployment/docker-prod-init-troubleshooting.md)。
