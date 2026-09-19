@@ -5,7 +5,7 @@
 ## 安装与升级
 
 - [3.1 升级说明](deployment/GEOFLOW_V3_1_UPGRADE.md) · [English instructions](deployment/GEOFLOW_V3_1_UPGRADE_en.md)：配套 Updater 0.4.0、旧版后台的首次升级、未受管站点桥接及维护窗口。
-- [3.0 升级教程](deployment/GEOFLOW_V3_UPGRADE.md)：版本选择、备份、普通 Compose 升级、Updater 接管、数据回填、验收和故障恢复。
+- [3.0 升级教程](deployment/GEOFLOW_V3_UPGRADE.md) · [English instructions](deployment/GEOFLOW_V3_UPGRADE_en.md)：版本选择、备份、普通 Compose 升级、Updater 接管、数据回填、验收和故障恢复。
 - [蓝绿部署与自动迁移教程](blue-green-deployment-usage.md) · [English tutorial](blue-green-deployment-usage_en.md)：签名安装、旧站接管、后台与 CLI 升级、备份和恢复；适用发布版本见教程开头。
 - [生产 Docker 部署](deployment/DEPLOYMENT.md)：首次安装、环境配置、反向代理和运行进程。
 - [初始化问题排查](deployment/docker-prod-init-troubleshooting.md)。
@@ -22,9 +22,9 @@
 
 ## 开发与集成方案
 
-- [ChatGPT插件与MCP后台管理方案](plans/chatgpt-mcp-management-rfc.md)：拟议架构、授权边界、工具契约与分阶段实施；尚未实现或部署。
-- [插件方案复核报告](reviews/chatgpt-mcp-management-review.md)：12项接入风险或设计缺口、源码依据及验证边界。
-- [插件实施与验收清单](plans/chatgpt-mcp-management-acceptance.md)：48项后续验收规格，当前均未执行。
+- [GEOFlow原生MCP与ChatGPT接入方案](plans/chatgpt-mcp-management-rfc.md)：单仓库、每实例独立授权、共享管理服务、连接界面与七个实施工作包；仅设计，尚未实现或部署。
+- [原生MCP方案复核报告](reviews/chatgpt-mcp-management-review.md)：20项风险与设计缺口，含Sanctum/OAuth共存、资源范围及恢复边界。
+- [原生MCP实施与验收清单](plans/chatgpt-mcp-management-acceptance.md)：80项后续验收规格，当前全部NOT_RUN。
 
 ## Wiki 与维护者资料
 
