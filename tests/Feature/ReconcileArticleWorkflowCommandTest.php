@@ -125,7 +125,7 @@ class ReconcileArticleWorkflowCommandTest extends TestCase
         $article = Article::query()->create(['title' => 'Recovery policy article', 'slug' => 'recovery-policy-probe', 'content' => 'Factual text.', 'task_id' => $task->id,
             'category_id' => Category::query()->create(['name' => 'Probe', 'slug' => 'probe'])->id, 'author_id' => Author::query()->create(['name' => 'Probe'])->id,
             'status' => 'draft', 'review_status' => 'pending', 'publication_intent' => 'hold', 'ai_quality_policy_version' => 1, 'ai_quality_retrieval_mode_override' => 'knowledge_broad']);
-        $path = '/private/tmp/recovery-policy-manifest-'.uniqid().'.json';
+        $path = sys_get_temp_dir().'/recovery-policy-manifest-'.uniqid().'.json';
         try {
             Artisan::call('geoflow:reconcile-article-workflow', ['--article' => [$article->id], '--manifest' => $path]);
             $manifest = json_decode(file_get_contents($path), true, flags: JSON_THROW_ON_ERROR);
