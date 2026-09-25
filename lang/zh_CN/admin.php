@@ -169,6 +169,9 @@ return [
         'return_admin' => '返回后台',
         'error_403_title' => '当前账户无权访问此页面',
         'error_403_message' => '请返回可访问的工作区，或联系超级管理员调整权限。',
+        // [本地补丁 2026-09-22] Laravel 无内置 405 视图，缺它会回退 Symfony 英文错误页
+        'error_405_title' => '该操作不支持当前的请求方式',
+        'error_405_message' => '请回到上一页重新提交，或返回管理后台继续操作。',
         'error_500_title' => '页面暂时无法完成请求',
         'error_500_message' => '系统已经记录异常，请稍后重试或返回后台继续操作。',
     ],
@@ -7273,7 +7276,7 @@ return [
         'mark_reviewed' => '标记已审核', 'archive' => '归档事实', 'merge' => '合并', 'split' => '拆分事实', 'split_selected' => '拆分所选值', 'archive_value' => '归档值', 'add_evidence' => '添加证据', 'add_value' => '添加标准值',
         'standard_value' => '标准值', 'unit' => '单位', 'standard_answer' => '标准答案', 'save' => '保存', 'generation_runs' => '生成任务', 'cancel' => '取消任务', 'resolve' => '处理冲突',
         'revisions' => '发布历史', 'restore' => '恢复为新版本', 'no_revisions' => '暂无发布版本。',
-        'message' => ['saved' => '原子事实已保存。', 'published' => '原子事实库已发布。', 'restored' => '历史版本已恢复为新版本。', 'generation_started' => '原子事实生成任务已启动。', 'generation_cancelled' => '生成任务已取消。', 'conflict_resolved' => '生成冲突已处理。'],
+        'message' => ['saved' => '原子事实已保存。', 'published' => '原子事实库已发布。', 'restored' => '历史版本已恢复为新版本。', 'generation_started' => '原子事实生成任务已启动。', 'generation_cancelled' => '生成任务已取消。', 'conflict_resolved' => '生成冲突已处理。', 'batch_reviewed' => '已批量审核 :count 个标准值。'],
         'dialog' => [
             'eyebrow' => '原子事实生成', 'starting_title' => '正在创建生成任务', 'starting_message' => '正在校验知识切片与模型配置，请稍候。',
             'close' => '关闭弹窗', 'background_action' => '后台继续', 'review_action' => '查看并审核', 'steps_label' => '原子事实生成步骤',

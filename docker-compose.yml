@@ -38,6 +38,9 @@ services:
 
   init:
     image: geoflow-app:latest
+    dns:
+      - "8.8.8.8"
+      - "1.1.1.1"
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -66,11 +69,21 @@ services:
 
   app:
     image: geoflow-app:latest
+    dns:
+      - "8.8.8.8"
+      - "1.1.1.1"
     container_name: geoflow-app
     working_dir: /var/www/html
     environment:
       AUTO_FIX_STORAGE_PERMISSIONS: "false"
       TRUSTED_PROXIES: "${TRUSTED_PROXIES:-REMOTE_ADDR}"
+      # [本地补丁 2026-09-22] 关机重启后 app 会联网重跑 composer install，若开机瞬间网络未就绪会失败（entrypoint 为 set -eu）并导致容器起不来。
+      # app 服务未注入 env_file，故在此显式关闭，去掉开机联网依赖、加快并加固启动。换代码后需手动 composer install 或临时改回 true。
+      COMPOSER_ON_START: "false"
+      # [本地补丁 2026-09-23] php artisan serve 会把"启动那一刻的 .env"转发进子进程环境，
+      # 而 Laravel 的环境加载不可覆盖，导致此后修改 .env 对常驻 web 服务一律无效。
+      # 把该开关提升为 Docker 级环境变量（值仍取自同一个 .env），up -d 便会在值变化时自动重建容器。
+      GEOFLOW_AI_WORKSPACE_RUNTIME_ENABLED: "${GEOFLOW_AI_WORKSPACE_RUNTIME_ENABLED:-true}"
     command: ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8080", "--no-reload"]
     volumes:
       - ./:/var/www/html
@@ -87,7 +100,9 @@ services:
     environment:
       GEOFLOW_FORWARDED_PREFIX: "${GEOFLOW_FORWARDED_PREFIX:-}"
     ports:
-      - "127.0.0.1:${APP_PORT:-18080}:80"
+      # [本地补丁 2026-09-22] 原为 "127.0.0.1:${APP_PORT:-18080}:80"（仅本机可访问），
+      # 改为绑定所有网卡以支持局域网访问。如需回退为仅本机，把 0.0.0.0 换回 127.0.0.1。
+      - "0.0.0.0:${APP_PORT:-18080}:80"
     volumes:
       - ./:/var/www/html:ro
       - ./docker/nginx/local.conf:/etc/nginx/templates/default.conf.template:ro
@@ -100,6 +115,9 @@ services:
 
   queue:
     image: geoflow-app:latest
+    dns:
+      - "8.8.8.8"
+      - "1.1.1.1"
     container_name: geoflow-queue
     working_dir: /var/www/html
     environment:
@@ -118,6 +136,9 @@ services:
 
   ai-quality-queue:
     image: geoflow-app:latest
+    dns:
+      - "8.8.8.8"
+      - "1.1.1.1"
     working_dir: /var/www/html
     environment:
       AUTO_FIX_STORAGE_PERMISSIONS: "false"
@@ -137,6 +158,9 @@ services:
 
   ai-quality-backfill-queue:
     image: geoflow-app:latest
+    dns:
+      - "8.8.8.8"
+      - "1.1.1.1"
     container_name: geoflow-ai-quality-backfill-queue
     working_dir: /var/www/html
     environment:
@@ -155,6 +179,9 @@ services:
 
   ai-optimization-queue:
     image: geoflow-app:latest
+    dns:
+      - "8.8.8.8"
+      - "1.1.1.1"
     container_name: geoflow-ai-optimization-queue
     working_dir: /var/www/html
     environment:
@@ -173,6 +200,9 @@ services:
 
   knowledge-queue:
     image: geoflow-app:latest
+    dns:
+      - "8.8.8.8"
+      - "1.1.1.1"
     container_name: geoflow-knowledge-queue
     working_dir: /var/www/html
     environment:
@@ -191,6 +221,9 @@ services:
 
   scheduler:
     image: geoflow-app:latest
+    dns:
+      - "8.8.8.8"
+      - "1.1.1.1"
     container_name: geoflow-scheduler
     working_dir: /var/www/html
     environment:
@@ -207,6 +240,9 @@ services:
 
   reverb:
     image: geoflow-app:latest
+    dns:
+      - "8.8.8.8"
+      - "1.1.1.1"
     container_name: geoflow-reverb
     working_dir: /var/www/html
     environment:

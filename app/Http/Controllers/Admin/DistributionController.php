@@ -1058,7 +1058,10 @@ class DistributionController extends Controller
     {
         $channelIds = $this->validatedSyncChannelIds($request);
         if ($channelIds->isEmpty()) {
-            return back()->withErrors(__('admin.distribution.message.settings_sync_selected_empty'));
+            // [本地补丁 2026-09-22] 原为 back()：该路由曾是 POST-only，back() 会指回 POST 地址而触发 405。统一指向分发列表页。
+            return redirect()
+                ->route('admin.distribution.index')
+                ->withErrors(__('admin.distribution.message.settings_sync_selected_empty'));
         }
 
         $channels = $this->syncableAgentChannelsQuery()
@@ -1067,7 +1070,9 @@ class DistributionController extends Controller
             ->get();
 
         if ($channels->isEmpty()) {
-            return back()->withErrors(__('admin.distribution.message.settings_sync_selected_empty'));
+            return redirect()
+                ->route('admin.distribution.index')
+                ->withErrors(__('admin.distribution.message.settings_sync_selected_empty'));
         }
 
         return $this->syncPreviewView('selected', $channels);
@@ -1151,7 +1156,9 @@ class DistributionController extends Controller
         $channelIds = $this->validatedSyncChannelIds($request);
 
         if ($channelIds->isEmpty()) {
-            return back()->withErrors(__('admin.distribution.message.settings_sync_selected_empty'));
+            return redirect()
+                ->route('admin.distribution.index')
+                ->withErrors(__('admin.distribution.message.settings_sync_selected_empty'));
         }
 
         $channels = $this->syncableAgentChannelsQuery()
@@ -1160,12 +1167,20 @@ class DistributionController extends Controller
             ->get();
 
         if ($channels->isEmpty()) {
-            return back()->withErrors(__('admin.distribution.message.settings_sync_selected_empty'));
+            return redirect()
+                ->route('admin.distribution.index')
+                ->withErrors(__('admin.distribution.message.settings_sync_selected_empty'));
         }
+
+        // [本地补丁 2026-09-22] 原为 back()：来源页 sync-settings-selected/preview 曾是 POST-only，
+        // 302 后浏览器以 GET 请求该地址 → 405 Method Not Allowed。改为显式重定向回预览页并回填 channel_ids。
+        $backToPreview = fn () => redirect()->route('admin.distribution.sync-settings-selected.preview', [
+            'channel_ids' => $channels->pluck('id')->all(),
+        ]);
 
         if (! $request->boolean('frontend_sync_confirmed')
             && (bool) $this->frontendExperienceInspector->syncPreviewForChannels($channels)['requires_confirmation']) {
-            return back()->withErrors('同步前需要先通过预览页确认前台体验风险。');
+            return $backToPreview()->withErrors('同步前需要先通过预览页确认前台体验风险。');
         }
 
         $synced = 0;
@@ -1188,8 +1203,8 @@ class DistributionController extends Controller
         ]);
 
         return $failed > 0
-            ? back()->with('message', $message)->withErrors(__('admin.distribution.message.settings_synced_all_failed_hint'))
-            : back()->with('message', $message);
+            ? $backToPreview()->with('message', $message)->withErrors(__('admin.distribution.message.settings_synced_all_failed_hint'))
+            : $backToPreview()->with('message', $message);
     }
 
     /**
@@ -1268,13 +1283,53 @@ class DistributionController extends Controller
                         (int) $lockedChannel->id,
                         null,
                         null,
-                        ['event' => 'site.settings.sync_failed']
+                        array_merge(
+                            ['event' => 'site.settings.sync_failed'],
+                            $this->outboundFailureContext($e),
+                        )
                     );
 
                     throw $e;
                 }
             },
         );
+    }
+
+    /**
+     * 出站失败的诊断字段（只用于日志，不影响任何行为）。
+     * 出站异常在构造时会把底层原因脱敏，这里把可安全落库的分类字段取出来，
+     * 便于事后判断是 timeout / connection / dns / gateway 还是远端返回的 HTTP 错误。
+     *
+     * @return array<string,mixed>
+     */
+    private function outboundFailureContext(Throwable $e): array
+    {
+        $context = ['exception' => $e::class];
+
+        foreach ([
+            'reasonCode' => 'reason_code',
+            'causeType' => 'cause_type',
+            'transportCategory' => 'transport_category',
+            'providerCategory' => 'provider_category',
+            'httpStatus' => 'http_status',
+            'providerCode' => 'provider_code',
+        ] as $property => $key) {
+            if (! property_exists($e, $property)) {
+                continue;
+            }
+
+            try {
+                $value = $e->{$property};
+            } catch (Throwable) {
+                continue;
+            }
+
+            if ($value !== null && $value !== '') {
+                $context[$key] = $value;
+            }
+        }
+
+        return $context;
     }
 
     private function normalizeDomain(string $domain): string

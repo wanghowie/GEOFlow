@@ -64,6 +64,7 @@ class KnowledgeFactRequest extends FormRequest
             ],
             'admin.knowledge-bases.facts.merge' => ['target_fact_id' => ['required', 'integer']],
             'admin.knowledge-bases.facts.split' => ['value_ids' => ['required', 'array', 'min:1'], 'value_ids.*' => ['integer'], 'stable_key' => ['required', 'string', 'max:160', 'regex:/\A[a-z0-9][a-z0-9._-]*\z/'], 'label' => ['required', 'string', 'max:255']],
+            'admin.knowledge-bases.fact-values.batch-review' => ['scope' => ['sometimes', 'in:pending,pending_evidenced']],
             default => [],
         };
     }

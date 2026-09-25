@@ -27,7 +27,9 @@ class ArticleFactCandidateExtractor
                 continue;
             }
 
-            preg_match_all('/[^。！？!?；;\n]+[。！？!?；;]?/u', $text, $matches, PREG_OFFSET_CAPTURE);
+            // [本地补丁 2026-09-22] 原正则只以中文标点/!/?/; 作终止符，英文句号 "." 未被识别，
+            // 导致整段英文被并成一个超长 claim。此处补上英文句号（排除小数 "3.5"）。
+            preg_match_all('/[^。！？!?；;\n]+?(?:[。！？!?；;]|\.(?!\d)|\n|$)/u', $text, $matches, PREG_OFFSET_CAPTURE);
             foreach ($matches[0] ?? [] as $match) {
                 $raw = (string) ($match[0] ?? '');
                 $byteOffset = (int) ($match[1] ?? 0);
@@ -107,15 +109,18 @@ class ArticleFactCandidateExtractor
 
     private function claimType(string $claim): ?string
     {
+        // [本地补丁 2026-09-22] 原规则仅覆盖中文表述，英文文章抽不出任何事实候选，
+        // 进而导致质检分段 injected 证据恒为空（模型误报"知识库为空 / unsupported_claim"）。
+        // 在保持原中文规则不变的前提下，为数据类与比较类补充英文写法。
         $patterns = [
-            'percentage' => '/(?:\d+(?:[.,]\d+)?\s*(?:%|％)|百分之[零〇一二两三四五六七八九十百千万点\d.]+|(?:增长率|转化率|占比)\D{0,12}\d+(?:[.,]\d+)?\s*(?:%|％)?)/u',
-            'amount' => '/(?:\d[\d,.]*\s*(?:元|万元|亿元|USD|CNY|RMB|\$|¥)|(?:\$|¥)\s*\d[\d,.]*|(?:价格|金额|售价|费用)\D{0,12}\d[\d,.]*|(?:人民币|美元|港元|欧元)\s*\d[\d,.]*)/iu',
-            'date' => '/(?:\d{4}\s*年|\d{1,2}\s*月|\d{1,2}\s*日|\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2})/u',
+            'percentage' => '/(?:\d+(?:[.,]\d+)?\s*(?:%|％)|百分之[零〇一二两三四五六七八九十百千万点\d.]+|(?:增长率|转化率|占比)\D{0,12}\d+(?:[.,]\d+)?\s*(?:%|％)?|\b\d+(?:[.,]\d+)?\s*(?:percent|per cent)\b)/iu',
+            'amount' => '/(?:\d[\d,.]*\s*(?:元|万元|亿元|USD|CNY|RMB|\$|¥)|(?:\$|¥)\s*\d[\d,.]*|(?:价格|金额|售价|费用)\D{0,12}\d[\d,.]*|(?:人民币|美元|港元|欧元)\s*\d[\d,.]*|\b(?:USD|CNY|RMB|EUR|GBP|JPY)\s*\d[\d,.]*|\b\d[\d,.]*\s*(?:dollars?|yuan|euros?|pounds?)\b)/iu',
+            'date' => '/(?:\d{4}\s*年|\d{1,2}\s*月|\d{1,2}\s*日|\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2}|\b(?:19|20)\d{2}\b|\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+(?:19|20)\d{2}\b)/iu',
             'ranking' => '/(?:第\s*[一二三四五六七八九十\d]+|排名|领先|唯一|首个|最高|最佳|国家级)/u',
             'qualification' => '/(?:(?:获得|取得|通过|拥有|持有|具备|获批)\D{0,12}(?:资质|认证|证书|许可|专利)|(?:资质|认证|证书|许可|专利)\D{0,8}(?:编号|号码|号为)\s*[A-Z0-9-]+|ISO\s*\d+)/iu',
             'guarantee' => '/(?:保证|确保|承诺|零风险|稳赚|百分百|100%|绝对)/u',
-            'citation' => '/(?:(?<![数证])据.{0,20}(?:报告|研究|数据|统计|显示|披露)|(?:来源|引用|参考资料|文献|报告)\s*[:：]|“[^”]{4,}”|「[^」]{4,}」)/u',
-            'comparison' => '/(?:高于|低于|超过|优于|不低于|不少于|同比|环比)/u',
+            'citation' => '/(?:(?<![数证])据.{0,20}(?:报告|研究|数据|统计|显示|披露)|(?:来源|引用|参考资料|文献|报告)\s*[:：]|“[^”]{4,}”|「[^」]{4,}」|\baccording to\b|\bas (?:reported|shown|stated|noted|published) by\b|"[^"\n]{8,}")/iu',
+            'comparison' => '/(?:高于|低于|超过|优于|不低于|不少于|同比|环比|\b(?:higher|lower|greater|smaller|better|worse|faster|slower|larger|cheaper|more (?:than|efficient|effective|reliable|durable|stable)|less than|at least|up to|exceed(?:s|ed|ing)?|outperform(?:s|ed)?|superior|inferior|compared (?:to|with)|in comparison (?:to|with)|versus|vs\.?)\b)/iu',
             'quantity' => '/(?:\d[\d,.]*\s*(?:家|人|户|次|项|个|台|套|份|篇|件|所|名)|(?:客户|用户|门店|员工|项目|案例|企业|机构)\D{0,8}\d[\d,.]*)/u',
         ];
 

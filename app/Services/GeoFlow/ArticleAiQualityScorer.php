@@ -17,6 +17,10 @@ class ArticleAiQualityScorer
         'data_mismatch' => 'data_traceability',
         'citation_missing' => 'data_traceability',
         'citation_scope_mismatch' => 'data_traceability',
+        // [本地补丁 2026-09-22] 与 ArticleAiQualityResultValidator / ScorerV2 的白名单对齐。
+        // 原名单缺此 code：模型一旦输出 source_declared_unverified，validator 放行、
+        // 这里却抛 "AI quality issue code is invalid"，导致整次质检 failed。
+        'source_declared_unverified' => 'data_traceability',
         'ad_absolute_claim' => 'advertising_compliance',
         'ad_false_or_misleading' => 'advertising_compliance',
         'ad_industry_specific' => 'advertising_compliance',

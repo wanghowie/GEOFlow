@@ -165,6 +165,9 @@ return array_replace_recursive($base, [
         'return_admin' => 'Voltar ao painel',
         'error_403_title' => 'Esta conta não pode acessar a página',
         'error_403_message' => 'Volte a um espaço disponível ou peça a um super admin para ajustar o acesso.',
+        // [local patch 2026-09-22] O Laravel não tem view 405, então caía na página de erro do Symfony
+        'error_405_title' => 'Esta ação não aceita o método solicitado',
+        'error_405_message' => 'Volte à página anterior e reenvie o formulário, ou retorne ao painel.',
         'error_500_title' => 'A solicitação não pôde ser concluída',
         'error_500_message' => 'O erro foi registrado. Tente novamente mais tarde ou volte ao painel.',
     ],

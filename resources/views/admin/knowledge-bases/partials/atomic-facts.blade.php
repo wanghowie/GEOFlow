@@ -132,7 +132,7 @@
                 <article class="rounded-lg border border-slate-200">
                     <div class="flex flex-wrap items-start justify-between gap-3 px-4 py-4">
                         <div><span class="font-semibold text-slate-900">{{ $fact->label }}</span><p class="mt-1 text-sm text-slate-600">{{ $fact->subject }} · {{ $fact->predicate }}</p></div>
-                        <span class="rounded-full px-2.5 py-1 text-xs font-medium {{ $fact->review_status === 'reviewed' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800' }}">{{ $fact->review_status === 'reviewed' ? '已审核' : '待审核' }}</span>
+                        <span class="rounded-full px-2.5 py-1 text-xs font-medium {{ $fact->review_status === 'reviewed' ? 'bg-emerald-50 text-emerald-700' : ($fact->review_status === 'rejected' ? 'bg-slate-200 text-slate-600' : 'bg-amber-50 text-amber-800') }}">{{ $fact->review_status === 'reviewed' ? '已审核' : ($fact->review_status === 'rejected' ? '已归档' : '待审核') }}</span>
                     </div>
 
                     @unless($systemReadOnly)
@@ -146,9 +146,11 @@
                     @endunless
 
                     <div class="space-y-3 border-t border-slate-100 bg-slate-50/70 px-4 py-4">
-                        @foreach($fact->values as $value)
+                        @php($activeValues = $fact->values->where('review_status', '!=', 'rejected'))
+                        @php($archivedValueCount = $fact->values->where('review_status', 'rejected')->count())
+                        @foreach($activeValues as $value)
                             <div class="rounded-lg bg-white p-3 shadow-sm ring-1 ring-slate-200">
-                                <div class="flex flex-wrap items-start justify-between gap-2"><p class="max-w-3xl text-sm leading-6 text-slate-800">{{ $value->canonical_answer }}</p><span class="text-xs text-slate-500">{{ $value->review_status === 'reviewed' ? '标准值已审核' : '标准值待审核' }} · {{ $value->evidences_count }} 条证据</span></div>
+                                <div class="flex flex-wrap items-start justify-between gap-2"><p class="max-w-3xl text-sm leading-6 text-slate-800">{{ $value->canonical_answer }}</p><span class="text-xs text-slate-500">{{ ['reviewed' => '标准值已审核', 'rejected' => '标准值已归档'][$value->review_status] ?? '标准值待审核' }} · {{ $value->evidences_count }} 条证据</span></div>
                                 <details class="mt-2 text-xs text-slate-500"><summary class="cursor-pointer font-semibold hover:text-slate-800">技术详情</summary><dl class="mt-2 grid gap-1 rounded-md bg-slate-50 p-3 sm:grid-cols-2"><div><dt>稳定键</dt><dd class="break-all font-mono">{{ $fact->stable_key }}</dd></div><div><dt>值类型</dt><dd class="font-mono">{{ $fact->value_type }}</dd></div><div><dt>锁版本</dt><dd class="font-mono">{{ $fact->lock_version }} / {{ $value->lock_version }}</dd></div><div><dt>原始值</dt><dd class="break-all font-mono">{{ json_encode($value->canonical_value_json, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) }}</dd></div></dl></details>
                                 @unless($systemReadOnly)
                                     <div class="mt-3 flex flex-wrap gap-2">
@@ -162,15 +164,19 @@
                             </div>
                         @endforeach
 
+                        @if($archivedValueCount > 0)
+                            <p class="px-1 text-xs text-slate-500">已归档 {{ $archivedValueCount }} 条标准值（保留审计记录，不参与质检与发布）。</p>
+                        @endif
+
                         @unless($systemReadOnly)
                             <details class="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-3">
                                 <summary class="cursor-pointer text-sm font-semibold text-slate-700">{{ __('admin.knowledge_facts.add_value') }}</summary>
                                 <form method="POST" action="{{ route('admin.knowledge-bases.fact-values.store', [$knowledgeBase->id, $fact->id]) }}" class="mt-3 grid gap-3 md:grid-cols-[1fr_8rem_1.4fr_auto]">@csrf<input name="canonical_value_json[value]" required placeholder="{{ __('admin.knowledge_facts.standard_value') }}" class="min-h-10 rounded-lg border-slate-300 text-sm"><input name="canonical_value_json[unit]" placeholder="{{ __('admin.knowledge_facts.unit') }}" class="min-h-10 rounded-lg border-slate-300 text-sm"><input name="canonical_answer" required placeholder="{{ __('admin.knowledge_facts.standard_answer') }}" class="min-h-10 rounded-lg border-slate-300 text-sm"><button class="min-h-10 rounded-lg bg-slate-900 px-4 text-sm font-semibold text-white">{{ __('admin.knowledge_facts.save') }}</button></form>
                             </details>
-                            @if($fact->values->count() > 1)
+                            @if($activeValues->count() > 1)
                                 <details class="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-3">
                                     <summary class="cursor-pointer text-sm font-semibold text-slate-700">{{ __('admin.knowledge_facts.split') }}</summary>
-                                    <form method="POST" action="{{ route('admin.knowledge-bases.facts.split', [$knowledgeBase->id, $fact->id]) }}" class="mt-3 grid gap-3 sm:grid-cols-2">@csrf<input name="stable_key" required placeholder="company.new_metric" class="min-h-10 rounded-lg border-slate-300 text-sm"><input name="label" required placeholder="{{ __('admin.knowledge_facts.label') }}" class="min-h-10 rounded-lg border-slate-300 text-sm"><div class="flex flex-wrap gap-3 sm:col-span-2">@foreach($fact->values as $value)<label class="inline-flex min-h-10 items-center gap-2 text-xs text-slate-600"><input type="checkbox" name="value_ids[]" value="{{ $value->id }}" class="rounded border-slate-300 text-orange-600">#{{ $value->id }} {{ Str::limit($value->canonical_answer, 28) }}</label>@endforeach</div><button class="min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-semibold sm:col-span-2">{{ __('admin.knowledge_facts.split_selected') }}</button></form>
+                                    <form method="POST" action="{{ route('admin.knowledge-bases.facts.split', [$knowledgeBase->id, $fact->id]) }}" class="mt-3 grid gap-3 sm:grid-cols-2">@csrf<input name="stable_key" required placeholder="company.new_metric" class="min-h-10 rounded-lg border-slate-300 text-sm"><input name="label" required placeholder="{{ __('admin.knowledge_facts.label') }}" class="min-h-10 rounded-lg border-slate-300 text-sm"><div class="flex flex-wrap gap-3 sm:col-span-2">@foreach($activeValues as $value)<label class="inline-flex min-h-10 items-center gap-2 text-xs text-slate-600"><input type="checkbox" name="value_ids[]" value="{{ $value->id }}" class="rounded border-slate-300 text-orange-600">#{{ $value->id }} {{ Str::limit($value->canonical_answer, 28) }}</label>@endforeach</div><button class="min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-semibold sm:col-span-2">{{ __('admin.knowledge_facts.split_selected') }}</button></form>
                                 </details>
                             @endif
                         @endunless
@@ -209,7 +215,10 @@
     @if($factLibrary && !$systemReadOnly)
         <footer class="flex flex-col gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
             <div><p class="text-sm font-semibold text-slate-800">发布准备度</p>@if(!($publishReadiness['ready'] ?? false))<ul class="mt-1 text-xs leading-5 text-amber-800">@foreach(($publishReadiness['blockers'] ?? []) as $blocker)<li>· {{ $blocker }}</li>@endforeach</ul>@else<p class="mt-1 text-xs text-emerald-700">事实、标准答案、冲突和证据检查均已通过。</p>@endif</div>
-            <form method="POST" action="{{ route('admin.knowledge-bases.facts.publish', ['knowledgeBaseId' => $knowledgeBase->id]) }}">@csrf<button @disabled(!($publishReadiness['ready'] ?? false)) class="min-h-10 w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white active:scale-[.98] disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto">{{ __('admin.knowledge_facts.publish') }}</button></form>
+            <div class="flex flex-wrap items-center gap-2 sm:justify-end">
+                <form method="POST" action="{{ route('admin.knowledge-bases.fact-values.batch-review', ['knowledgeBaseId' => $knowledgeBase->id]) }}">@csrf<input type="hidden" name="scope" value="pending"><button type="submit" onclick="return confirm('确认批量审核全部待审标准值？\n此操作会把所有未审核、未归档的标准值标记为「已审核」。\n仍缺少证据或存在冲突的值会在发布前继续被拦截，不会直接发布。')" class="min-h-10 w-full rounded-lg border border-orange-300 bg-white px-4 py-2 text-sm font-semibold text-orange-700 transition-[background-color,transform] duration-150 hover:bg-orange-50 active:scale-[.98] sm:w-auto">批量审核待审值</button></form>
+                <form method="POST" action="{{ route('admin.knowledge-bases.facts.publish', ['knowledgeBaseId' => $knowledgeBase->id]) }}">@csrf<button @disabled(!($publishReadiness['ready'] ?? false)) class="min-h-10 w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white active:scale-[.98] disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto">{{ __('admin.knowledge_facts.publish') }}</button></form>
+            </div>
         </footer>
     @endif
 </section>

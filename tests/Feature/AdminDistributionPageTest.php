@@ -2345,6 +2345,67 @@ class AdminDistributionPageTest extends TestCase
             ->assertSessionHasErrors();
     }
 
+    /**
+     * [回归测试 2026-09-22] 「确认并同步」后落回的重定向地址必须是可用 GET 打开的预览页。
+     * 修复前 sync-settings-selected/preview 仅注册 POST，浏览器跟随 302 会得到 405 Method Not Allowed。
+     */
+    public function test_selected_settings_sync_redirect_target_is_get_reachable(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://selected-get.example.com/geoflow-agent/v1/site-settings' => Http::response([
+                'ok' => true,
+                'updated' => true,
+            ]),
+            '*' => Http::response(['ok' => false], 500),
+        ]);
+
+        $channel = DistributionChannel::query()->create([
+            'name' => '回跳验证站',
+            'domain' => 'selected-get.example.com',
+            'endpoint_url' => 'https://selected-get.example.com',
+            'channel_type' => 'geoflow_agent',
+            'status' => 'active',
+        ]);
+        DistributionChannelSecret::query()->create([
+            'distribution_channel_id' => (int) $channel->id,
+            'key_id' => 'gfk_sync_selected_get',
+            'secret_ciphertext' => app(ApiKeyCrypto::class)->encrypt('gfsec_sync_selected_get_secret'),
+            'status' => 'active',
+            'scopes' => ['site.settings.update'],
+        ]);
+
+        $admin = $this->admin();
+
+        $response = $this->actingAs($admin, 'admin')
+            ->post(route('admin.distribution.sync-settings-selected'), [
+                'frontend_sync_confirmed' => '1',
+                'channel_ids' => [(int) $channel->id],
+            ]);
+
+        $response->assertRedirect();
+        $location = (string) $response->headers->get('Location');
+        $this->assertStringContainsString('sync-settings-selected/preview', $location);
+        $this->assertStringContainsString('channel_ids', $location);
+
+        $this->actingAs($admin, 'admin')
+            ->get($location)
+            ->assertOk()
+            ->assertSee('回跳验证站')
+            ->assertSee('确认并同步');
+    }
+
+    /**
+     * [回归测试 2026-09-22] 预览页改支持 GET 后，未携带 channel_ids 时不得抛错，应回到分发列表页并给出提示。
+     */
+    public function test_selected_settings_preview_without_channels_redirects_to_index(): void
+    {
+        $this->actingAs($this->admin(), 'admin')
+            ->get(route('admin.distribution.sync-settings-selected.preview'))
+            ->assertRedirect(route('admin.distribution.index'))
+            ->assertSessionHasErrors();
+    }
+
     public function test_admin_can_pause_distribution_channel_and_hide_it_from_task_form(): void
     {
         $admin = $this->admin();
