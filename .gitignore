@@ -30,3 +30,17 @@ __pycache__/
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# 本地密钥备份与临时诊断脚本（切勿提交到仓库）
+.env.bak.*
+ch_ctx_test.php
+ch_diag.php
+ch_retry_test.php
+ch_ui_verify.php
+kb3_publish.php
+kb3_reconcile.php
+kb3_rename.php
+kb3_reslice.php
+qc_recheck.php
+reanchor-fact-evidence.php
+test_extract.php
