@@ -5,6 +5,7 @@ namespace App\Services\GeoFlow;
 use App\Models\ArticleDistribution;
 use App\Models\DistributionChannel;
 use App\Models\DistributionChannelSecret;
+use App\Services\Outbound\OutboundRequestFailedException;
 use App\Services\Outbound\SafeOutboundHttpClient;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Response;
@@ -181,13 +182,13 @@ class DistributionHttpClient
         }
 
         $endpoint = $this->endpoint($channel, $path);
-        $response = $this->postSignedJson($secret, $endpoint, $path, $body, $event, $idempotencyKey, 30);
+        $response = $this->postSignedJsonWithRetry($secret, $endpoint, $path, $body, $event, $idempotencyKey, 30);
         $failedResponse = $response;
 
         if ($response->status() === 404 && $this->canUseIndexPhpFallback($channel)) {
             $fallbackBaseUrl = $this->indexPhpBaseUrl($channel);
             $fallbackEndpoint = $this->indexPhpEndpoint($channel, $path);
-            $fallbackResponse = $this->postSignedJson($secret, $fallbackEndpoint, $path, $body, $event, $idempotencyKey, 30);
+            $fallbackResponse = $this->postSignedJsonWithRetry($secret, $fallbackEndpoint, $path, $body, $event, $idempotencyKey, 30);
             $failedResponse = $fallbackResponse;
 
             if (! $fallbackResponse->failed()) {
@@ -205,6 +206,41 @@ class DistributionHttpClient
         }
 
         return $this->decodeJson($response);
+    }
+
+    /**
+     * 传输层瞬时故障分类。这些失败没有拿到远端响应（或只在网关层失败），
+     * 重试是安全的：所有 POST 都携带幂等键，远端按 key 去重，不会重复写入。
+     *
+     * @var list<string>
+     */
+    private const TRANSIENT_TRANSPORT_CATEGORIES = ['timeout', 'connection', 'dns', 'gateway'];
+
+    /**
+     * [本地补丁 2026-09-22] 出站瞬时失败自动重试一次（400ms 退避）。
+     *
+     * 背景：站点设置同步曾出现「同一操作 2 分钟内一次成功、一次 Outbound request failed」的抖动，
+     * 连测 12 次出站请求全部成功，判定为透明代理链路瞬时故障。此重试用于自愈这类抖动。
+     *
+     * 边界：安全策略拦截（OutboundRequestBlockedException）与远端 4xx/5xx 不重试——
+     * 前者是配置问题，重试无意义；后者是远端明确拒绝，重试只会重复失败。
+     */
+    private function postSignedJsonWithRetry(DistributionChannelSecret $secret, string $endpoint, string $path, string $body, string $event, string $idempotencyKey, int $timeout): Response
+    {
+        $maxAttempts = 2;
+
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                return $this->postSignedJson($secret, $endpoint, $path, $body, $event, $idempotencyKey, $timeout);
+            } catch (OutboundRequestFailedException $e) {
+                if ($attempt >= $maxAttempts
+                    || ! in_array($e->transportCategory, self::TRANSIENT_TRANSPORT_CATEGORIES, true)) {
+                    throw $e;
+                }
+
+                usleep(400000);
+            }
+        }
     }
 
     private function postSignedJson(DistributionChannelSecret $secret, string $endpoint, string $path, string $body, string $event, string $idempotencyKey, int $timeout): Response

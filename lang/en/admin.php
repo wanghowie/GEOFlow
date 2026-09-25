@@ -169,6 +169,9 @@ return [
         'return_admin' => 'Return to admin',
         'error_403_title' => 'This account cannot access the page',
         'error_403_message' => 'Return to an available workspace or ask a super admin to update your access.',
+        // [local patch 2026-09-22] Laravel ships no 405 view, so it fell back to the Symfony error page
+        'error_405_title' => 'This action does not accept the requested method',
+        'error_405_message' => 'Go back and submit the form again, or return to the admin workspace.',
         'error_500_title' => 'The request could not be completed',
         'error_500_message' => 'The error has been recorded. Try again later or return to the admin workspace.',
     ],

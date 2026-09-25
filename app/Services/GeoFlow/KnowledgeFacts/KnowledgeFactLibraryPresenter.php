@@ -2,6 +2,7 @@
 
 namespace App\Services\GeoFlow\KnowledgeFacts;
 
+use App\Models\KnowledgeFactEvidence;
 use App\Models\KnowledgeFactGenerationRun;
 use App\Models\KnowledgeFactLibrary;
 use App\Models\KnowledgeFactValue;
@@ -13,7 +14,7 @@ class KnowledgeFactLibraryPresenter
     public function summary(KnowledgeFactLibrary $library): array
     {
         $facts = $library->facts();
-        $values = KnowledgeFactValue::query()->whereHas('fact', fn ($query) => $query->where('library_id', $library->id));
+        $values = KnowledgeFactValue::query()->where('review_status', '!=', 'rejected')->whereHas('fact', fn ($query) => $query->where('library_id', $library->id));
 
         return [
             'fact_count' => (clone $facts)->count(),
@@ -39,18 +40,53 @@ class KnowledgeFactLibraryPresenter
         if ((clone $enabled)->where('review_status', '!=', 'reviewed')->exists()) {
             $blockers[] = '仍有事实指标等待审核。';
         }
-        $values = KnowledgeFactValue::query()->whereHas('fact', fn ($query) => $query->where('library_id', $library->id)->where('is_enabled', true));
+        $values = KnowledgeFactValue::query()->where('review_status', '!=', 'rejected')->whereHas('fact', fn ($query) => $query->where('library_id', $library->id)->where('is_enabled', true));
         if ((clone $values)->where('review_status', '!=', 'reviewed')->exists()) {
             $blockers[] = '仍有标准答案等待审核。';
         }
         if ((clone $values)->where('conflict_status', '!=', 'clear')->exists()) {
             $blockers[] = '仍有冲突等待处理。';
         }
-        if ((clone $enabled)->whereDoesntHave('values.evidences')->exists()) {
+        if ((clone $enabled)->whereDoesntHave('values', fn ($query) => $query->where('review_status', '!=', 'rejected')->has('evidences'))->exists()) {
             $blockers[] = '部分事实缺少可定位证据。';
+        }
+        $staleEvidenceCount = $this->staleEvidenceCount($library);
+        if ($staleEvidenceCount > 0) {
+            $blockers[] = "有 {$staleEvidenceCount} 条证据已与知识切片脱节（出处失效），需重新生成或重新锚定证据后才能发布。";
         }
 
         return ['ready' => $blockers === [], 'blockers' => $blockers];
+    }
+
+    /**
+     * 统计已与当前知识切片脱节的证据数（判定条件与 KnowledgeFactPublisher 发布门禁一致）。
+     */
+    private function staleEvidenceCount(KnowledgeFactLibrary $library): int
+    {
+        $knowledgeBase = $library->knowledgeBase()->first();
+        $generation = $knowledgeBase?->chunk_serving_generation;
+        $evidences = KnowledgeFactEvidence::query()
+            ->whereHas('value.fact', fn ($query) => $query->where('library_id', $library->id)->where('is_enabled', true))
+            ->whereHas('value', fn ($query) => $query->where('review_status', '!=', 'rejected'))
+            ->with('knowledgeChunk')
+            ->get(['id', 'value_id', 'knowledge_chunk_id', 'source_hash', 'content_hash', 'excerpt', 'excerpt_hash']);
+
+        $stale = 0;
+        foreach ($evidences as $evidence) {
+            $chunk = $evidence->knowledgeChunk;
+            $excerpt = trim((string) $evidence->excerpt);
+            if ($chunk === null
+                || (int) $chunk->knowledge_base_id !== (int) $library->knowledge_base_id
+                || ($generation !== null && (string) $chunk->generation_key !== (string) $generation)
+                || ! hash_equals((string) $chunk->source_hash, (string) $evidence->source_hash)
+                || ! hash_equals((string) $chunk->content_hash, (string) $evidence->content_hash)
+                || ! hash_equals(hash('sha256', $excerpt), (string) $evidence->excerpt_hash)
+                || ! str_contains((string) $chunk->content, $excerpt)) {
+                $stale++;
+            }
+        }
+
+        return $stale;
     }
 
     /** @return array<string,mixed> */

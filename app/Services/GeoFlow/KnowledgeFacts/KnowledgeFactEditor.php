@@ -86,6 +86,52 @@ class KnowledgeFactEditor
         }, 3);
     }
 
+    /**
+     * 批量将待审标准值标记为已审核，沿用单条审核的乐观锁与审计字段。
+     * @param 'pending'|'pending_evidenced' $scope
+     */
+    public function batchReviewValues(KnowledgeFactLibrary $library, string $scope, Admin $admin): int
+    {
+        return DB::transaction(function () use ($library, $scope, $admin): int {
+            KnowledgeFactLibrary::query()->whereKey($library->id)->lockForUpdate()->firstOrFail();
+
+            $query = KnowledgeFactValue::query()
+                ->whereHas('fact', fn ($q) => $q->where('library_id', $library->id)->where('is_enabled', true))
+                ->where('review_status', '!=', 'rejected')
+                ->where('review_status', '!=', 'reviewed');
+
+            if ($scope === 'pending_evidenced') {
+                $query->where('conflict_status', 'clear')
+                    ->whereHas('evidences', fn ($q) => $q->where('is_primary', true));
+            }
+
+            $values = $query->get();
+            $count = 0;
+
+            foreach ($values as $value) {
+                $updated = KnowledgeFactValue::query()
+                    ->whereKey($value->id)
+                    ->where('lock_version', $value->lock_version)
+                    ->update([
+                        'review_status' => 'reviewed',
+                        'updated_by_admin_id' => $admin->id,
+                        'lock_version' => $value->lock_version + 1,
+                        'updated_at' => now(),
+                    ]);
+
+                if ($updated === 1) {
+                    $count++;
+                }
+            }
+
+            if ($count > 0) {
+                $library->increment('working_version');
+            }
+
+            return $count;
+        }, 3);
+    }
+
     /** @param array<string,mixed> $data */
     public function createEvidence(KnowledgeFactLibrary $library, KnowledgeFactValue $value, array $data, Admin $admin): KnowledgeFactEvidence
     {

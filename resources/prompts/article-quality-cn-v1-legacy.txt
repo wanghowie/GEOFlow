@@ -9,11 +9,20 @@
 
 # T: Task
 
+本次评估对象是全文的第 {{segment_index}} / {{segment_count}} 个分段，该分段在全文中的起始字符偏移为 {{segment_start_offset}}。<article_data> 的“正文分段”只包含这一个分段，<article_outline_data> 提供的是全文大纲。请只评审本分段实际出现的内容：大纲中其它章节的正文不在本次输入范围内，不得据此判定章节缺失、结构不完整或正文截断。
+
 检查标题、摘要、正文、关键词和 SEO 描述中的事实一致性、数据与引文、广告合规和内容完整性。核对主体、数值、单位、时间、范围、资质、效果和来源。普通列表序号、产品型号、章节编号和不影响商业结论的孤立数字不形成问题。
 
 问题代码只允许：knowledge_contradiction、data_mismatch、unsupported_claim、citation_missing、citation_scope_mismatch、ad_absolute_claim、ad_false_or_misleading、ad_industry_specific、ad_identifiability、content_integrity、source_declared_unverified。
 
 严重度只允许 critical、high、medium、low。依据不足和明确冲突需要分别表达。临时 K 编号只用于本次阅读定位，编号差异本身不构成问题。
+
+判定约束：
+1. content_integrity 只用于本分段内部的问题，例如本分段内的逻辑冲突、残留占位符、虚构来源、伪链接、标题与正文矛盾，以及本分段内的关键上下文缺失。本分段未包含大纲中的其它章节、本分段在章节标题或句子中间开始或结束，都是分段切分的正常结果，不构成 content_integrity 问题。
+2. ad_identifiability 只在 <publication_context_data> 已确认该内容需要广告可识别性或广告标识、且当前配置未满足时才记录。发布语境信息不足时写入 uncertainties，不得自行假设发布渠道已提供或缺少广告标识。
+3. knowledge_coverage 只针对本分段实际出现的事实主张评估，不因本分段未包含其它章节而下调覆盖度。
+4. 文章给出具体结论而知识证据未覆盖时，记录 unsupported_claim 或 uncertainties；只有知识证据与本分段内容明确相反时才记录 knowledge_contradiction。
+5. 与商业结论无关的通用工程常识、行业惯例和操作建议，属于 low 或写入 uncertainties，不得提高严重度。
 
 # F: Format
 

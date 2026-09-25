@@ -274,7 +274,9 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
             Route::get('jobs', [DistributionController::class, 'jobs'])->name('jobs');
             Route::get('sync-settings-all/preview', [DistributionController::class, 'previewSyncSettingsAll'])->name('sync-settings-all.preview');
             Route::post('sync-settings-all', [DistributionController::class, 'syncSettingsAll'])->name('sync-settings-all');
-            Route::post('sync-settings-selected/preview', [DistributionController::class, 'previewSyncSettingsSelected'])->name('sync-settings-selected.preview');
+            // [本地补丁 2026-09-22] 补 GET：预览页此前只注册 POST，导致「确认并同步」后
+            // 302 回到该地址时浏览器以 GET 请求 → 405 Method Not Allowed。与 sync-settings-all/preview 对齐。
+            Route::match(['get', 'post'], 'sync-settings-selected/preview', [DistributionController::class, 'previewSyncSettingsSelected'])->name('sync-settings-selected.preview');
             Route::post('sync-settings-selected', [DistributionController::class, 'syncSettingsSelected'])->name('sync-settings-selected');
             Route::get('jobs/{distributionId}/edit', [DistributionController::class, 'editArticle'])->name('article.edit')->whereNumber('distributionId');
             Route::put('jobs/{distributionId}', [DistributionController::class, 'updateArticle'])->name('article.update')->whereNumber('distributionId');
@@ -517,6 +519,7 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
             Route::post('{knowledgeBaseId}/facts/{factId}/values', [KnowledgeFactController::class, 'storeValue'])->name('fact-values.store')->whereNumber(['knowledgeBaseId', 'factId']);
             Route::put('{knowledgeBaseId}/fact-values/{valueId}', [KnowledgeFactController::class, 'updateValue'])->name('fact-values.update')->whereNumber(['knowledgeBaseId', 'valueId']);
             Route::post('{knowledgeBaseId}/fact-values/{valueId}/archive', [KnowledgeFactController::class, 'archiveValue'])->name('fact-values.archive')->whereNumber(['knowledgeBaseId', 'valueId']);
+            Route::post('{knowledgeBaseId}/fact-values/batch-review', [KnowledgeFactController::class, 'batchReviewValues'])->name('fact-values.batch-review')->whereNumber(['knowledgeBaseId']);
             Route::post('{knowledgeBaseId}/fact-values/{valueId}/evidences', [KnowledgeFactController::class, 'storeEvidence'])->name('fact-evidences.store')->whereNumber(['knowledgeBaseId', 'valueId']);
             Route::post('{knowledgeBaseId}/facts/{factId}/merge', [KnowledgeFactController::class, 'merge'])->name('facts.merge')->whereNumber(['knowledgeBaseId', 'factId']);
             Route::post('{knowledgeBaseId}/facts/{factId}/split', [KnowledgeFactController::class, 'split'])->name('facts.split')->whereNumber(['knowledgeBaseId', 'factId']);

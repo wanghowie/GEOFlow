@@ -106,6 +106,15 @@ class KnowledgeFactController extends Controller
         return $this->response($request, ['fact' => $fact], __('admin.knowledge_facts.message.saved'));
     }
 
+    public function batchReviewValues(KnowledgeFactRequest $request, int $knowledgeBaseId, KnowledgeFactEditor $editor): JsonResponse|RedirectResponse
+    {
+        $library = $this->library($knowledgeBaseId);
+        $scope = (string) $request->input('scope', 'pending');
+        $reviewed = $editor->batchReviewValues($library, $scope, $this->admin($request));
+
+        return $this->response($request, ['reviewed' => $reviewed], __('admin.knowledge_facts.message.batch_reviewed', ['count' => $reviewed]));
+    }
+
     public function storeValue(KnowledgeFactRequest $request, int $knowledgeBaseId, int $factId, KnowledgeFactEditor $editor): JsonResponse|RedirectResponse
     {
         $library = $this->library($knowledgeBaseId);
